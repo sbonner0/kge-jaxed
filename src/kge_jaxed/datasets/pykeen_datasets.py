@@ -1,8 +1,12 @@
 """Contains the PyKEEN dataset class. This allows for the use of PyKEEN's built-in datasets."""
 
-import pandas as pd
-from base import BaseTFDataset
+import pandas as pd  # type: ignore
 from pykeen.datasets import get_dataset
+
+from kge_jaxed.datasets.base import BaseTFDataset  # type: ignore
+from kge_jaxed.negative_sampling.uniform_negative_sampling import (  # type: ignore
+    UniformNegativeSampling,
+)
 
 
 class PyKEENDataset(BaseTFDataset):
@@ -31,25 +35,39 @@ class PyKEENDataset(BaseTFDataset):
         """
 
         # Load the dataset from PyKEEN
-        dataset = get_dataset(dataset=self.dataset_name)
+        pykeen_ds = get_dataset(dataset=self.dataset_name)
 
         # Extract the training, validation, and test triples
-        self.train_df = pd.DataFrame(dataset.training.mapped_triples.numpy(), columns=["head", "relation", "tail"])
-        self.val_df = pd.DataFrame(dataset.validation.mapped_triples.numpy(), columns=["head", "relation", "tail"])
-        self.test_df = pd.DataFrame(dataset.testing.mapped_triples.numpy(), columns=["head", "relation", "tail"])
+        self.train_df = pd.DataFrame(
+            pykeen_ds.training.mapped_triples.numpy(), columns=["head", "relation", "tail"], dtype="int32"
+        )
+        self.val_df = pd.DataFrame(
+            pykeen_ds.validation.mapped_triples.numpy(), columns=["head", "relation", "tail"], dtype="int32"
+        )
+        self.test_df = pd.DataFrame(
+            pykeen_ds.testing.mapped_triples.numpy(), columns=["head", "relation", "tail"], dtype="int32"
+        )
+
+        # Set the number of entities and relations
+        self.num_entities = pykeen_ds.num_entities
+        self.num_relations = pykeen_ds.num_relations
 
 
 if __name__ == "__main__":
 
     dataset = PyKEENDataset(dataset_name="nations", batch_size=32, shuffle=True)
-    train_dataset = dataset.get_train_dataset()
-    val_dataset = dataset.get_val_dataset()
-    test_dataset = dataset.get_test_dataset()
+    negative_sampler = UniformNegativeSampling(num_entities=dataset.num_entities, k=2)
+
+    train_dataset = dataset.get_train_dataset(negative_sampler)
+    val_dataset = dataset.get_val_dataset(negative_sampler)
+    test_dataset = dataset.get_test_dataset(negative_sampler)
+
     print(train_dataset)
     print(val_dataset)
     print(test_dataset)
 
     # Iterate through the train dataset
     print("Train Dataset:")
-    for triple in train_dataset:
-        print("Triple:", triple.numpy())
+    for pos_batch, neg_batch in train_dataset:
+        print("pos_batch:", pos_batch)
+        print("neg_batch:", neg_batch)

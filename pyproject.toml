@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kge_jaxed"
+dynamic = ["version"]  # Version will be managed by setuptools-scm
+description = "A simple and lightweight package for knowledge graph embedding using JAX"
+readme = "README.md"
+authors = [
+    { name = "Stephen Bonner"} 
+]
+
+dependencies = [
+    "numpy",
+    "pandas"
+]
+requires-python = ">=3.12"
+
+[project.optional-dependencies]
+dev = ["pytest", "tox"]
+
+[tool.setuptools.packages.find]
+where = ["src"]  # If using a src layout, otherwise remove this
+include = ["kge_jaxed*"]  # Adjust to match your package name
+
+[tool.setuptools_scm]
+fallback_version = "0.1.0"
+write_to = "src/kge_jaxed/_version.py"  # Generates a version file
