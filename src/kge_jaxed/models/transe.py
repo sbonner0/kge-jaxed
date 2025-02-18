@@ -1,4 +1,5 @@
 import jax.numpy as jnp
+from jax import Array
 
 from kge_jaxed.models.base_kge import BaseKGE
 
@@ -8,10 +9,7 @@ class TransE(BaseKGE):
         super().__init__(num_entities, num_relations, embedding_dim)
         self.norm = norm
 
-    def score_hrt(self, triples):
-        h = self.entity_embedding(triples[:, 0])
-        r = self.relation_embedding(triples[:, 1])
-        t = self.entity_embedding(triples[:, 2])
+    def interaction_function(self, h: Array, r: Array, t: Array) -> Array:
 
         score = h + r - t
         return -jnp.linalg.norm(score, ord=self.norm, axis=1)
