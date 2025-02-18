@@ -1,4 +1,7 @@
-from abc import ABC
+from abc import ABC, abstractmethod
+
+from jax import Array
+from jax.typing import ArrayLike
 
 from kge_jaxed.models.base_embedding import BaseEmbedding
 
@@ -39,5 +42,14 @@ class BaseKGE(ABC):
             num_embeddings=self.num_relations, embedding_dim=self.embedding_dim, **relation_embedding_kwargs
         )
 
-    def score_hrt(self, triples):
+    def score_hrt(self, triples: Array) -> Array:
+
+        h = self.entity_embedding(triples[:, 0])
+        r = self.relation_embedding(triples[:, 1])
+        t = self.entity_embedding(triples[:, 2])
+
+        return self.interaction_function(h, r, t)
+
+    @abstractmethod
+    def interaction_function(self, h: Array, r: Array, t: Array) -> Array:
         raise NotImplementedError
