@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 
 from jax import Array
-from jax.typing import ArrayLike
 
 from kge_jaxed.models.base_embedding import BaseEmbedding
 
