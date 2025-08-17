@@ -5,10 +5,6 @@ from abc import ABC, abstractmethod
 import pandas as pd  # type: ignore
 import tensorflow as tf  # type: ignore
 
-from kge_jaxed.negative_sampling.uniform_negative_sampling import (  # type: ignore
-    UniformNegativeSampling,
-)
-
 
 class BaseTFDataset(ABC):
     def __init__(self, batch_size: int = 32, shuffle: bool = True) -> None:
@@ -52,7 +48,7 @@ class BaseTFDataset(ABC):
 
         return tf.stack([example[col] for col in ["head", "relation", "tail"]], axis=-1)
 
-    def _create_pipeline(self, df: pd.DataFrame, negative_sampler: UniformNegativeSampling):
+    def _create_pipeline(self, df: pd.DataFrame):
         """
         Create a TensorFlow data pipeline for the given DataFrame.
         """
@@ -61,19 +57,14 @@ class BaseTFDataset(ABC):
         if self.shuffle:
             dataset = dataset.shuffle(len(df))
         dataset = dataset.batch(self.batch_size)
-        # Map a function to add negative samples to each batch.
-        dataset = dataset.map(
-            lambda positives: (positives, negative_sampler.generate_negatives_batch(positives)),
-            num_parallel_calls=tf.data.AUTOTUNE,
-        )
         dataset = dataset.prefetch(tf.data.AUTOTUNE)
         return dataset
 
-    def get_train_dataset(self, neg_sampler: UniformNegativeSampling):
-        return self._create_pipeline(self.train_df, neg_sampler)
+    def get_train_dataset(self):
+        return self._create_pipeline(self.train_df)
 
-    def get_val_dataset(self, neg_sampler: UniformNegativeSampling):
-        return self._create_pipeline(self.val_df, neg_sampler)
+    def get_val_dataset(self):
+        return self._create_pipeline(self.val_df)
 
-    def get_test_dataset(self, neg_sampler: UniformNegativeSampling):
-        return self._create_pipeline(self.test_df, neg_sampler)
+    def get_test_dataset(self):
+        return self._create_pipeline(self.test_df)
