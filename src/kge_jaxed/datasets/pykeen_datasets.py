@@ -4,9 +4,6 @@ import pandas as pd  # type: ignore
 from pykeen.datasets import get_dataset
 
 from kge_jaxed.datasets.base import BaseTFDataset  # type: ignore
-from kge_jaxed.negative_sampling.uniform_negative_sampling import (  # type: ignore
-    UniformNegativeSampling,
-)
 
 
 class PyKEENDataset(BaseTFDataset):
@@ -56,11 +53,10 @@ class PyKEENDataset(BaseTFDataset):
 if __name__ == "__main__":
 
     dataset = PyKEENDataset(dataset_name="nations", batch_size=32, shuffle=True)
-    negative_sampler = UniformNegativeSampling(num_entities=dataset.num_entities, k=2)
 
-    train_dataset = dataset.get_train_dataset(negative_sampler)
-    val_dataset = dataset.get_val_dataset(negative_sampler)
-    test_dataset = dataset.get_test_dataset(negative_sampler)
+    train_dataset = dataset.get_train_dataset()
+    val_dataset = dataset.get_val_dataset()
+    test_dataset = dataset.get_test_dataset()
 
     print(train_dataset)
     print(val_dataset)
@@ -68,6 +64,5 @@ if __name__ == "__main__":
 
     # Iterate through the train dataset
     print("Train Dataset:")
-    for pos_batch, neg_batch in train_dataset:
+    for pos_batch in train_dataset:
         print("pos_batch:", pos_batch)
-        print("neg_batch:", neg_batch)

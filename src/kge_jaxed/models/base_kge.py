@@ -1,11 +1,14 @@
+"""The base class for knowledge graph embedding models."""
+
 from abc import ABC, abstractmethod
 
+from flax import nnx
 from jax import Array
 
 from kge_jaxed.models.base_embedding import BaseEmbedding
 
 
-class BaseKGE(ABC):
+class BaseKGE(ABC, nnx.Module):
 
     def __init__(
         self,
