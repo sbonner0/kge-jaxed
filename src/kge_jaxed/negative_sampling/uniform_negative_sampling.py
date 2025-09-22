@@ -33,16 +33,16 @@ def uniform_balanced_sampler(
     side = jnp.arange(k) < k_head  # [K] True=head, False=tail
 
     # sample K entity replacements per row
-    raw = jax.random.randint(key, (B, k), 0, num_entities - 1)  # [B,K]
-    originals = jnp.where(side[None, :], h[:, None], t[:, None])  # [B,K]
+    raw = jax.random.randint(key, (B, k), 0, num_entities - 1)  # [B, K]
+    originals = jnp.where(side[None, :], h[:, None], t[:, None])  # [B, K]
     neg_ent = jnp.where(raw >= originals, raw + 1, raw).astype(triples.dtype)
 
     # build corrupted triples
-    neg_h = jnp.where(side[None, :], neg_ent, h[:, None])  # [B,K]
-    neg_t = jnp.where(side[None, :], t[:, None], neg_ent)  # [B,K]
-    neg_r = jnp.broadcast_to(r[:, None], (B, k))  # [B,K]
+    neg_h = jnp.where(side[None, :], neg_ent, h[:, None])  # [B, K]
+    neg_t = jnp.where(side[None, :], t[:, None], neg_ent)  # [B, K]
+    neg_r = jnp.broadcast_to(r[:, None], (B, k))  # [B, K]
 
     # stack into triples
-    neg = jnp.stack((neg_h, neg_r, neg_t), axis=-1)  # [B,K,3]
-    # side_mask = jnp.broadcast_to(side, (B, k))  # [B,K]
+    neg = jnp.stack((neg_h, neg_r, neg_t), axis=-1)  # [B, K, 3]
+    # side_mask = jnp.broadcast_to(side, (B, k))  # [B, K]
     return neg

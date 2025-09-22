@@ -1,70 +1,83 @@
-"""Base class for creating Knowledge Graph TensorFlow-based datasets from pandas DataFrames."""
+"""Base class for creating Knowledge Graph grain datasets from pandas DataFrames."""
 
 from abc import ABC, abstractmethod
+from typing import Iterator, Literal
 
+import grain  # type: ignore
+import numpy as np
 import pandas as pd  # type: ignore
-import tensorflow as tf  # type: ignore
 
 
-class BaseTFDataset(ABC):
-    def __init__(self, batch_size: int = 32, shuffle: bool = True) -> None:
+class BaseDataset(ABC):
+    def __init__(self, batch_size: int = 32, shuffle: bool = True, seed: int = 0) -> None:
         """
-        Initialize the dataset.
+        Base class for creating Knowledge Graph grain datasets from pandas DataFrames.
 
-        :param batch_size: Batch size for training.
-        :type batch_size: int
-        :param shuffle: Whether to shuffle the dataset.
-        :type shuffle: bool
+        :param batch_size: Batch size, defaults to 32
+        :type batch_size: int, optional
+        :param shuffle: Whether to shuffle the dataset, defaults to True
+        :type shuffle: bool, optional
+        :param seed: Random seed for shuffling, defaults to 0
+        :type seed: int, optional
         """
-
         self.batch_size = batch_size
         self.shuffle = shuffle
+        self.seed = seed
 
-        # Initialize the DataFrames
+        # same fields as your TF class
         self.train_df = pd.DataFrame()
         self.val_df = pd.DataFrame()
         self.test_df = pd.DataFrame()
 
     @abstractmethod
-    def load_data(self):
-        """
-        Load the dataset from file.
-        """
-        pass
+    def load_data(self) -> None:
+        """Populate self.train_df / self.val_df / self.test_df."""
+        raise NotImplementedError
 
-    def _dataframe_to_tf_dataset(self, df: pd.DataFrame):
+    def _df_to_records(self, df: pd.DataFrame) -> np.ndarray:
         """
-        Convert a pandas DataFrame to a TensorFlow Dataset.
-        """
+        Convert a DataFrame to a NumPy array of triples.
 
-        dict_data = {key: df[key].values for key in df.columns}
-        dataset = tf.data.Dataset.from_tensor_slices(dict_data)
-        return dataset
+        :param df: Input DataFrame with columns ["head", "relation", "tail"]
+        :type df: pd.DataFrame
+        :return: NumPy array of shape [N, 3] with dtype int32
+        :rtype: np.ndarray
+        """
+        # returns a NumPy array shape [N, 3] (head, relation, tail), int32
+        arr = df[["head", "relation", "tail"]].to_numpy()
+        if arr.dtype != np.int32:
+            arr = arr.astype(np.int32, copy=False)
+        return arr
 
-    def _preprocess(self, example):
+    def _make_iter(self, df: pd.DataFrame) -> Iterator[np.ndarray]:
         """
-        Preprocess the data by extracting the head, relation, and tail columns.
-        """
+        Create an iterator that yields batches of triples from the DataFrame.
 
-        return tf.stack([example[col] for col in ["head", "relation", "tail"]], axis=-1)
-
-    def _create_pipeline(self, df: pd.DataFrame):
+        :param df: Input DataFrame with columns ["head", "relation", "tail"]
+        :type df: pd.DataFrame
+        :yield: Batches of triples of shape [B, 3] with dtype int32
+        :rtype: Iterator[np.ndarray]
         """
-        Create a TensorFlow data pipeline for the given DataFrame.
-        """
-        dataset = self._dataframe_to_tf_dataset(df)
-        dataset = dataset.map(self._preprocess, num_parallel_calls=tf.data.AUTOTUNE)
+        records = self._df_to_records(df)  # [N,3]
+        ds = grain.MapDataset.source(records)
         if self.shuffle:
-            dataset = dataset.shuffle(len(df))
-        dataset = dataset.batch(self.batch_size)
-        dataset = dataset.prefetch(tf.data.AUTOTUNE)
-        return dataset
+            ds = ds.shuffle(seed=self.seed)  # global shuffle
+        ds = ds.map(lambda x: x.astype(np.int32, copy=False))
+        ds = ds.batch(self.batch_size)  # -> yields [B,3] arrays
 
-    def get_train_dataset(self):
-        return self._create_pipeline(self.train_df)
+        # Optional: tune prefetch/threads via ReadOptions later if needed
+        for batch in ds:
+            # batch is already a NumPy array [B,3]
+            yield batch
 
-    def get_val_dataset(self):
-        return self._create_pipeline(self.val_df)
+    def iter_batches(self, split: Literal["train", "val", "test"] = "train") -> Iterator[np.ndarray]:
+        """
+        Create an iterator that yields batches of triples from the specified split.
 
-    def get_test_dataset(self):
-        return self._create_pipeline(self.test_df)
+        :param split: Which split to use, defaults to "train"
+        :type split: Literal[], optional
+        :return: Iterator over batches of triples
+        :rtype: Iterator[np.ndarray]
+        """
+        df = {"train": self.train_df, "val": self.val_df, "test": self.test_df}[split]
+        return self._make_iter(df)
