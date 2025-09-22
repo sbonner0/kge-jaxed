@@ -3,10 +3,10 @@
 import pandas as pd  # type: ignore
 from pykeen.datasets import get_dataset
 
-from kge_jaxed.datasets.base import BaseTFDataset  # type: ignore
+from kge_jaxed.datasets.base import BaseDataset  # type: ignore
 
 
-class PyKEENDataset(BaseTFDataset):
+class PyKEENDataset(BaseDataset):
     """
     Uses PyKEEN built-in datasets to create knowledge graphs.
     """
@@ -54,9 +54,9 @@ if __name__ == "__main__":
 
     dataset = PyKEENDataset(dataset_name="nations", batch_size=32, shuffle=True)
 
-    train_dataset = dataset.get_train_dataset()
-    val_dataset = dataset.get_val_dataset()
-    test_dataset = dataset.get_test_dataset()
+    train_dataset = dataset.iter_batches("train")
+    val_dataset = dataset.iter_batches("val")
+    test_dataset = dataset.iter_batches("test")
 
     print(train_dataset)
     print(val_dataset)
@@ -66,3 +66,6 @@ if __name__ == "__main__":
     print("Train Dataset:")
     for pos_batch in train_dataset:
         print("pos_batch:", pos_batch)
+        print("pos_batch.shape:", pos_batch.shape)
+        print("pos_batch.dtype:", pos_batch.dtype)
+        break
