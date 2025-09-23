@@ -1,15 +1,56 @@
 """Base class for creating Knowledge Graph grain datasets from pandas DataFrames."""
 
 from abc import ABC, abstractmethod
-from typing import Iterator, Literal
+from typing import Any, Literal, Optional, Sequence
 
 import grain  # type: ignore
 import numpy as np
 import pandas as pd  # type: ignore
+from grain import DatasetIterator
+from numpy.typing import NDArray
+
+
+class PandasArraySource(grain.sources.RandomAccessDataSource):
+    """
+    Minimal random-access data source for Grain from a pandas DataFrame.
+    """
+
+    def __init__(self, df: pd.DataFrame, columns: Optional[Sequence[str]] = None):
+        """
+        Minimal random-access data source for Grain from a pandas DataFrame.
+
+        :param df: Input DataFrame
+        :type df: pd.DataFrame
+        :param columns: Columns to include, defaults to all columns
+        :type columns: Optional[Sequence[str]], optional
+        :raises KeyError: If any of the specified columns are not found in the DataFrame
+        """
+        self._df = df.reset_index(drop=True)
+        self._cols = list(columns) if columns is not None else list(self._df.columns)
+        missing = [c for c in self._cols if c not in self._df.columns]
+        if missing:
+            raise KeyError(f"columns not found: {missing}")
+        # Keep only the requested columns in order (fast iloc later)
+        self._df = self._df[self._cols]
+
+    def __len__(self) -> int:
+        return len(self._df)
+
+    def __getitem__(self, index: int, /) -> NDArray[Any]:
+        if index < 0 or index >= len(self):
+            raise IndexError(index)
+        return self._df.iloc[index].to_numpy()
 
 
 class BaseDataset(ABC):
-    def __init__(self, batch_size: int = 32, shuffle: bool = True, seed: int = 0) -> None:
+    def __init__(
+        self,
+        batch_size: int = 32,
+        shuffle: bool = True,
+        seed: int = 0,
+        num_threads: int = 16,
+        prefetch_buffer_size: int = 500,
+    ) -> None:
         """
         Base class for creating Knowledge Graph grain datasets from pandas DataFrames.
 
@@ -19,10 +60,16 @@ class BaseDataset(ABC):
         :type shuffle: bool, optional
         :param seed: Random seed for shuffling, defaults to 0
         :type seed: int, optional
+        :param num_threads: Number of threads for data loading, defaults to 16
+        :type num_threads: int, optional
+        :param prefetch_buffer_size: Size of the prefetch buffer, defaults to 500
+        :type prefetch_buffer_size: int, optional
         """
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.seed = seed
+        self.num_threads = num_threads
+        self.prefetch_buffer_size = prefetch_buffer_size
 
         # same fields as your TF class
         self.train_df = pd.DataFrame()
@@ -34,22 +81,7 @@ class BaseDataset(ABC):
         """Populate self.train_df / self.val_df / self.test_df."""
         raise NotImplementedError
 
-    def _df_to_records(self, df: pd.DataFrame) -> np.ndarray:
-        """
-        Convert a DataFrame to a NumPy array of triples.
-
-        :param df: Input DataFrame with columns ["head", "relation", "tail"]
-        :type df: pd.DataFrame
-        :return: NumPy array of shape [N, 3] with dtype int32
-        :rtype: np.ndarray
-        """
-        # returns a NumPy array shape [N, 3] (head, relation, tail), int32
-        arr = df[["head", "relation", "tail"]].to_numpy()
-        if arr.dtype != np.int32:
-            arr = arr.astype(np.int32, copy=False)
-        return arr
-
-    def _make_iter(self, df: pd.DataFrame) -> Iterator[np.ndarray]:
+    def _make_iter(self, df: pd.DataFrame) -> DatasetIterator:
         """
         Create an iterator that yields batches of triples from the DataFrame.
 
@@ -58,19 +90,19 @@ class BaseDataset(ABC):
         :yield: Batches of triples of shape [B, 3] with dtype int32
         :rtype: Iterator[np.ndarray]
         """
-        records = self._df_to_records(df)  # [N,3]
-        ds = grain.MapDataset.source(records)
+        source = PandasArraySource(df)  # [N,3]
+        ds = grain.MapDataset.source(source)
         if self.shuffle:
             ds = ds.shuffle(seed=self.seed)  # global shuffle
         ds = ds.map(lambda x: x.astype(np.int32, copy=False))
         ds = ds.batch(self.batch_size)  # -> yields [B,3] arrays
 
-        # Optional: tune prefetch/threads via ReadOptions later if needed
-        for batch in ds:
-            # batch is already a NumPy array [B,3]
-            yield batch
+        iter_dataset = ds.to_iter_dataset(
+            grain.ReadOptions(num_threads=self.num_threads, prefetch_buffer_size=self.prefetch_buffer_size)
+        )
+        return iter(iter_dataset)
 
-    def iter_batches(self, split: Literal["train", "val", "test"] = "train") -> Iterator[np.ndarray]:
+    def iter_batches(self, split: Literal["train", "val", "test"] = "train") -> DatasetIterator:
         """
         Create an iterator that yields batches of triples from the specified split.
 
