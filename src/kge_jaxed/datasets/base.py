@@ -30,7 +30,6 @@ class PandasArraySource(grain.sources.RandomAccessDataSource):
         missing = [c for c in self._cols if c not in self._df.columns]
         if missing:
             raise KeyError(f"columns not found: {missing}")
-        # Keep only the requested columns in order (fast iloc later)
         self._df = self._df[self._cols]
 
     def __len__(self) -> int:
@@ -71,10 +70,12 @@ class BaseDataset(ABC):
         self.num_threads = num_threads
         self.prefetch_buffer_size = prefetch_buffer_size
 
-        # same fields as your TF class
         self.train_df = pd.DataFrame()
         self.val_df = pd.DataFrame()
         self.test_df = pd.DataFrame()
+
+        self.num_entities = 0
+        self.num_relations = 0
 
     @abstractmethod
     def load_data(self) -> None:

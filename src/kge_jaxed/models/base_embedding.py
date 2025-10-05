@@ -14,6 +14,7 @@ class BaseEmbedding(nnx.Module):
         embedding_dim: int,
         dropout_rate: float = 0.0,
         param_dtype: Dtype = jnp.float32,
+        rngs: nnx.Rngs = nnx.Rngs(0),
         **kwargs,
     ) -> None:
         """
@@ -27,6 +28,8 @@ class BaseEmbedding(nnx.Module):
         :type dropout_rate: float, optional
         :param param_dtype: Data type for the parameters, defaults to jnp.float32
         :type param_dtype: Dtype, optional
+        :param rngs: RNGs for the module, defaults to nnx.Rngs(0)
+        :type rngs: nnx.Rngs, optional
         """
 
         super().__init__()
@@ -38,10 +41,10 @@ class BaseEmbedding(nnx.Module):
             num_embeddings=self.num_embeddings,
             features=self.embedding_dim,
             param_dtype=param_dtype,
-            rngs=nnx.Rngs(0),
+            rngs=rngs,
             **kwargs,
         )
-        self.dropout = nnx.Dropout(rate=self.dropout_rate, rngs=nnx.Rngs(0))
+        self.dropout = nnx.Dropout(rate=self.dropout_rate, rngs=rngs)
 
     def __call__(self, x):
         x = self.emb(x)

@@ -44,5 +44,19 @@ def uniform_balanced_sampler(
 
     # stack into triples
     neg = jnp.stack((neg_h, neg_r, neg_t), axis=-1)  # [B, K, 3]
-    # side_mask = jnp.broadcast_to(side, (B, k))  # [B, K]
+
     return neg
+
+
+if __name__ == "__main__":
+
+    # Example usage
+    triples = jnp.array([[0, 0, 1], [2, 1, 3], [4, 0, 5]], dtype=jnp.int32)
+    num_entities = 6
+    k = 4
+    key = jax.random.PRNGKey(42)
+
+    neg_samples = uniform_balanced_sampler(triples, num_entities, k, key)
+    print("Positive Triples:\n", triples)
+    print("Negative Samples:\n", neg_samples)
+    print("Negative Samples Shape:", neg_samples.shape)
