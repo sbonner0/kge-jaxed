@@ -1,6 +1,7 @@
 """The base class for knowledge graph embedding models."""
 
 from abc import ABC, abstractmethod
+from typing import Optional
 
 from flax import nnx
 from jax import Array
@@ -17,6 +18,7 @@ class BaseKGE(ABC, nnx.Module):
         embedding_dim: int,
         entity_embedding_kwargs: dict = {},
         relation_embedding_kwargs: dict = {},
+        rngs: nnx.Rngs = nnx.Rngs(0),
     ) -> None:
         """
         Initialize the base class for knowledge graph embedding models.
@@ -31,6 +33,8 @@ class BaseKGE(ABC, nnx.Module):
         :type entity_embedding_kwargs: dict, optional
         :param relation_embedding_kwargs: Args for the relation embedding, defaults to {}
         :type relation_embedding_kwargs: dict, optional
+        :param rngs: RNGs for the module, defaults to nnx.Rngs(0)
+        :type rngs: nnx.Rngs, optional
         """
 
         self.num_entities = num_entities
@@ -38,10 +42,10 @@ class BaseKGE(ABC, nnx.Module):
         self.embedding_dim = embedding_dim
 
         self.entity_embedding = BaseEmbedding(
-            num_embeddings=self.num_entities, embedding_dim=self.embedding_dim, **entity_embedding_kwargs
+            num_embeddings=self.num_entities, embedding_dim=self.embedding_dim, **entity_embedding_kwargs, rngs=rngs
         )
         self.relation_embedding = BaseEmbedding(
-            num_embeddings=self.num_relations, embedding_dim=self.embedding_dim, **relation_embedding_kwargs
+            num_embeddings=self.num_relations, embedding_dim=self.embedding_dim, **relation_embedding_kwargs, rngs=rngs
         )
 
     def score_hrt(self, triples: Array) -> Array:

@@ -13,6 +13,6 @@ def loss_fn_wrapper(model, batch, neg_batch):
     :return: _description_
     :rtype: _type_
     """
-    pos_scores = model.score(batch[:, 0], batch[:, 1], batch[:, 2])
-    neg_scores = model.score(neg_batch[:, 0], neg_batch[:, 1], neg_batch[:, 2])
+    pos_scores = model.score_hrt(batch)
+    neg_scores = model.score_hrt(neg_batch)
     return pos_scores, neg_scores
