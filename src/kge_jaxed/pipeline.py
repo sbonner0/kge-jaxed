@@ -1,182 +1,187 @@
-# kge_jaxed/trainer/pipeline.py
-# import flax.nnx as nnx
-# import jax
-# import jax.numpy as jnp
-# import numpy as np
-
-# from ..config import TrainConfig
-# from ..registries import LOSSES, MODELS, SAMPLERS
-
-
-# class Pipeline:
-#     def __init__(self, cfg: TrainConfig, key: jax.random.PRNGKey):
-#         self.cfg = cfg
-#         self.key = nnx.Rngs(jax.random.PRNGKey(cfg.seed))
-#         Model = MODELS.get(cfg.model)
-#         self.model = Model(cfg.num_entities, cfg.num_relations, cfg.embedding_dim, self.key)
-#         self.optimizer = nnx.Optimizer(self.model, nnx.adam(cfg.learning_rate), wrt=nnx.Param)
-#         self.metrics = nnx.MultiMetric(loss=nnx.metrics.Average())
-
-#         self.loss_fn = LOSSES.get(cfg.loss)
-#         self.sampler = SAMPLERS.get(cfg.sampler)
-
-#     def _score_batch(self, model, batch):
-#         return model.score(batch[:, 0], batch[:, 1], batch[:, 2])
-
-#     def _loss(self, model, batch, key):
-#         # positives
-#         pos_scores = self._score_batch(model, batch)  # [B]
-#         # negatives (on device)
-#         neg_triples, _ = self.sampler(batch, self.cfg.num_entities, self.cfg.num_negatives, key)
-#         B, K, _ = neg_triples.shape
-#         neg_scores = self._score_batch(model, neg_triples.reshape(B * K, 3)).reshape(B, K)
-#         # loss
-#         if self.cfg.loss == "mrl":
-#             return self.loss_fn(pos_scores, neg_scores, margin=self.cfg.margin)
-#         return self.loss_fn(pos_scores, neg_scores)
-
-#     @nnx.jit  # compiles the step incl. sampler
-#     def train_step(self, model, optimizer: nnx.Optimizer, metrics: nnx.MultiMetric, batch, key):
-#         loss, grads = nnx.value_and_grad(self._loss)(model, batch, key)
-#         metrics.update(loss=loss)
-#         optimizer.update(model, grads)
-#         return loss
-
-#     def fit(self, tf_dataset):
-#         # iterate positives from tf.data; everything else stays on device
-#         for epoch in range(self.cfg.epochs):
-#             for batch_np in tf_dataset:  # batch_np: (B,3) numpy from CPU
-#                 batch = jnp.asarray(batch_np)  # move to device once
-#                 self.key, k = self.key.split()
-#                 self.train_step(self.model, self.optimizer, self.metrics, batch, k)
-#             print(f"epoch {epoch+1}: loss={self.metrics['loss'].compute():.4f}")
-#             self.metrics.reset()
-
-
-import time
-
-# kge_jaxed/trainer.py
-from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from functools import partial
+from typing import Any, Dict
 
 import jax
 import jax.numpy as jnp
 import optax
 from flax import nnx
 
-from kge_jaxed.data.adapters import numpy_batch_to_device, tf_dataset_to_numpy_iterator
-from kge_jaxed.registries import LOSSES, MODELS, SAMPLERS
+from kge_jaxed.datasets.base import BaseDataset
+from kge_jaxed.datasets.pykeen_datasets import PyKEENDataset
+from kge_jaxed.loss_functions.losses import bce_loss, margin_ranking_loss
+from kge_jaxed.models.transe import TransE
+from kge_jaxed.negative_sampling.uniform_negative_sampling import (
+    uniform_balanced_sampler,
+)
+from kge_jaxed.registries import LOSSES, MODELS
+
+# ----------------------------- #
+# JIT-friendly step functions   #
+# ----------------------------- #
 
 
-@dataclass
-class TrainerConfig:
-    model_name: str = "transe"
-    loss_name: str = "mrl"
-    sampler_name: str = "uniform_balanced"
-    embedding_dim: int = 200
-    learning_rate: float = 1e-3
-    weight_decay: float = 0.0
-    k_negatives: int = 64
-    num_entities: int = 0
-    num_relations: int = 0
-    seed: int = 0
-    # JIT friendliness: keep k static
-    jit_static_k: bool = True
+@partial(nnx.jit, static_argnames=("negative_samples", "num_entities", "loss_fn"))
+def train_step_fn(model, optimizer, neg_key, batch, negative_samples, num_entities, loss_fn) -> float:
+    """Train step that takes a raw JAX key instead of nnx.Rngs"""
+
+    def loss_on_model(m):
+        neg = uniform_balanced_sampler(batch, num_entities, negative_samples, neg_key)
+        neg = neg.reshape(-1, 3)
+
+        return loss_fn(m, batch, neg)
+
+    loss, grads = nnx.value_and_grad(loss_on_model)(model)
+    optimizer.update(model, grads)
+    return loss
 
 
-class Trainer:
-    def __init__(self, cfg: TrainerConfig):
-        self.cfg = cfg
+@partial(nnx.jit, static_argnames=("negative_samples", "num_entities", "loss_fn"))
+def eval_step_fn(model, neg_key, batch, *, negative_samples, num_entities, loss_fn):
+    """Eval step that takes a raw JAX key"""
+    neg = uniform_balanced_sampler(batch, num_entities, negative_samples, neg_key).reshape(-1, 3)
+    return loss_fn(model, batch, neg)
 
-        self.rngs = nnx.Rngs(nnx.make_rng("params", seed=cfg.seed), nnx.make_rng("dropout", seed=cfg.seed + 1))
-        ModelCls = MODELS.get(cfg.model_name)
-        self.model = ModelCls(
-            rngs=self.rngs,
-            num_entities=cfg.num_entities,
-            num_relations=cfg.num_relations,
-            embedding_dim=cfg.embedding_dim,
+
+# ----------------------------- #
+# Pipeline class                #
+# ----------------------------- #
+class KGEPipeline:
+    """Simple pipeline for training Knowledge Graph Embedding models (JAX + Flax NNX)."""
+
+    def __init__(
+        self,
+        model_name: str,
+        loss_name: str,
+        dataset: BaseDataset | str,
+        train_batch_size: int = 32,
+        embedding_dim: int = 100,
+        negative_samples: int = 1,
+        learning_rate: float = 1e-3,
+        seed: int = 42,
+        **model_kwargs: Any,
+    ):
+        """Initialize the KGE training pipeline."""
+        self.negative_samples = int(negative_samples)
+        self.learning_rate = float(learning_rate)
+        self.seed = int(seed)
+
+        # Sort out dataset input
+        if isinstance(dataset, str):
+            self.dataset = PyKEENDataset(dataset_name=dataset, batch_size=train_batch_size)
+        elif isinstance(dataset, BaseDataset):
+            self.dataset = dataset
+
+        # Get model and loss from registries
+        model_cls = MODELS.get(model_name)
+        self.loss_fn = LOSSES.get(loss_name)
+
+        # Keys: base -> split for init vs training
+        self.base_key = self._make_base_key(self.seed)
+        self.init_key, self.train_key = jax.random.split(self.base_key)
+
+        # Dedicated init RNGs (separate from training steps)
+        init_rngs = self._make_init_rngs(self.init_key)
+
+        # Build model
+        self.model = model_cls(
+            num_entities=self.dataset.num_entities,
+            num_relations=self.dataset.num_relations,
+            embedding_dim=embedding_dim,
+            rngs=init_rngs,
+            **model_kwargs,
         )
 
-        # Optax optimizer
-        tx = optax.chain(
-            optax.add_decayed_weights(cfg.weight_decay) if cfg.weight_decay > 0 else optax.identity(),
-            optax.adam(cfg.learning_rate),
-        )
-        # NNX stateful optimizer wrapper
-        self.opt = nnx.Optimizer(self.model, tx)
+        # Optimizer bound to NNX params
+        self.optimizer = nnx.Optimizer(self.model, optax.adam(self.learning_rate), wrt=nnx.Param)
 
-        self.loss_fn = LOSSES.get(cfg.loss_name)
-        self.sampler_fn = SAMPLERS.get(cfg.sampler_name)
+    # -------- RNG helpers -------- #
 
-        # Compile steps
-        self._compile_train_step()
+    @staticmethod
+    def _make_base_key(seed: int) -> jax.Array:
+        """Seeded, multi-host-safe base key."""
+        base = jax.random.PRNGKey(seed)
+        return jax.random.fold_in(base, jax.process_index())
 
-    def _compile_train_step(self):
-        k = self.cfg.k_negatives
-        sampler_fn = self.sampler_fn
-        loss_fn = self.loss_fn
+    @staticmethod
+    def _make_init_rngs(init_key: jax.Array) -> nnx.Rngs:
+        """One-off RNGs for parameter initialization (kept disjoint from training)."""
+        k_params, k_dropout, k_neg = jax.random.split(init_key, 3)
+        return nnx.Rngs(params=k_params, dropout=k_dropout, neg=k_neg)
 
-        def loss_for_batch(model, pos_triples, neg_triples):
-            return loss_fn(model, pos_triples, neg_triples)
-
-        def train_step(opt: nnx.Optimizer, pos_triples: jnp.ndarray, key: jax.Array):
-            model = opt.target
-            # negatives on device
-            neg_triples = sampler_fn(pos_triples, self.cfg.num_entities, k, key)
-
-            # grads
-            def _loss_wrap(model_):
-                return loss_for_batch(model_, pos_triples, neg_triples)
-
-            loss, grads = nnx.value_and_grad(_loss_wrap)(model)
-            opt.update(grads)  # in-place update of model params
-            return opt, loss
-
-        # JIT compile (k is static inside sampler; we don’t need it static here)
-        self.train_step = jax.jit(train_step)
-
-    def fit(self, train_ds, val_ds=None, epochs: int = 1, log_every: int = 50):
+    def _make_step_key(self, step: int, phase: int = 0) -> jax.Array:
         """
-        train_ds: tf.data.Dataset yielding [B,3] int arrays (your BaseTFDataset pipelines).
+        Generate a JAX key for a specific step.
+        phase=0 → train; phase=1 → eval (keeps streams disjoint).
         """
-        step = 0
-        rng = jax.random.PRNGKey(self.cfg.seed + 42)
+        k = jax.random.fold_in(self.train_key, phase)
+        return jax.random.fold_in(k, int(step))
 
-        for epoch in range(1, epochs + 1):
-            t0 = time.time()
-            losses = []
-            for batch_np in tf_dataset_to_numpy_iterator(train_ds):
-                pos = numpy_batch_to_device(batch_np)  # jnp[int32] [B,3]
-                rng, sub = jax.random.split(rng)
-                self.opt, loss = self.train_step(self.opt, pos, sub)
-                losses.append(float(loss))
-                step += 1
-                if step % log_every == 0:
-                    print(f"epoch {epoch} step {step} loss {sum(losses)/len(losses):.4f}")
-            print(f"epoch {epoch} done in {time.time()-t0:.1f}s; mean loss={sum(losses)/max(1,len(losses)):.4f}")
+    # -------- Training / eval loops -------- #
 
-            # if val_ds is not None:
-            #     val_loss = self.evaluate(val_ds)
-            #     print(f"[val] epoch {epoch} loss={val_loss:.4f}")
+    def train(self, epochs: int = 100, log_every: int = 10) -> Dict[str, Any]:
+        """
+        Train loop. Deterministic RNGs derived from (seed, process, phase=0, global_step).
+        """
+        train_losses: list[float] = []
+        global_step = 0
 
-    # @jax.jit
-    # def _eval_step(self, model, pos_triples):
-    #     # minimal: score positives; if you want val negatives, replicate train path.
-    #     return jnp.mean(model.score_batch(pos_triples))
+        print(f"Starting training for {epochs} epochs...")
 
-    # def evaluate(self, val_ds) -> float:
-    #     scores = []
-    #     for batch_np in tf_dataset_to_numpy_iterator(val_ds):
-    #         pos = numpy_batch_to_device(batch_np)
-    #         scores.append(float(self._eval_step(self.model, pos)))
-    #     # higher is better for raw scores; invert if you want a "loss-like" number
-    #     return -(sum(scores) / max(1, len(scores)))
+        for epoch in range(int(epochs)):
+            epoch_losses = []
 
-    # # --- persistence stubs (swap for Orbax/Flax checkpoints as needed) ---
-    # def state_dict(self) -> Dict[str, Any]:
-    #     # NNX has .state_dict()
-    #     return {"model": nnx.state(self.model), "opt": nnx.state(self.opt)}
+            for batch in self.dataset.iter_batches("train"):
+                batch = jnp.array(batch)
 
-    # def load_state_dict(self, state):
-    #     nnx.update(self.model, state["model"])
-    #     nnx.update(self.opt, state["opt"])
+                # Generate key for this step
+                step_key = self._make_step_key(global_step, phase=0)
+
+                # JITed step (mutates model via optimizer in-place)
+                loss = train_step_fn(
+                    self.model,
+                    self.optimizer,
+                    step_key,
+                    batch,
+                    self.negative_samples,
+                    self.dataset.num_entities,
+                    self.loss_fn,
+                )
+
+                epoch_losses.append(float(loss))
+                global_step += 1
+
+            avg_loss = float(jnp.mean(jnp.array(epoch_losses)))
+            train_losses.append(avg_loss)
+
+            if (epoch + 1) % int(log_every) == 0:
+                print(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.4f}")
+
+        return {
+            "train_losses": train_losses,
+            "seed": self.seed,
+        }
+
+    def evaluate(self, split: str = "valid", max_batches: int | None = None) -> float:
+        """
+        Simple evaluation over a split using disjoint RNG phase (=1).
+        Typically deterministic (no dropout).
+        """
+        losses = []
+        for i, batch in enumerate(self.dataset.iter_batches(split)):
+            if max_batches is not None and i >= max_batches:
+                break
+            batch = jnp.array(batch)
+
+            # Generate key for eval step
+            step_key = self._make_step_key(i, phase=1)
+
+            loss = eval_step_fn(
+                self.model,
+                step_key,
+                batch,
+                negative_samples=self.negative_samples,
+                num_entities=self.dataset.num_entities,
+                loss_fn=self.loss_fn,
+            )
+            losses.append(float(loss))
+        return float(jnp.mean(jnp.array(losses))) if losses else float("nan")
