@@ -3,7 +3,6 @@
 import jax.numpy as jnp
 import optax
 
-from kge_jaxed.loss_functions.loss_utils import loss_fn_wrapper
 from kge_jaxed.registries import LOSSES
 
 

@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Any, Dict
+from typing import Any, Dict, Literal, cast
 
 import jax
 import jax.numpy as jnp
@@ -8,6 +8,8 @@ from flax import nnx
 
 from kge_jaxed.datasets.base import BaseDataset
 from kge_jaxed.datasets.pykeen_datasets import PyKEENDataset
+from kge_jaxed.evaluation.metrics import compute_metrics_from_ranks
+from kge_jaxed.evaluation.utils import rank_triple
 from kge_jaxed.loss_functions.losses import bce_loss, margin_ranking_loss
 from kge_jaxed.models.transe import TransE
 from kge_jaxed.negative_sampling.uniform_negative_sampling import (
@@ -16,30 +18,53 @@ from kge_jaxed.negative_sampling.uniform_negative_sampling import (
 from kge_jaxed.registries import LOSSES, MODELS
 
 # ----------------------------- #
-# JIT-friendly step functions   #
+# JIT-friendly step function   #
 # ----------------------------- #
 
 
-@partial(nnx.jit, static_argnames=("negative_samples", "num_entities", "loss_fn"))
-def train_step_fn(model, optimizer, neg_key, batch, negative_samples, num_entities, loss_fn) -> float:
-    """Train step that takes a raw JAX key instead of nnx.Rngs"""
+@partial(nnx.jit, static_argnames=("num_negative_samples", "num_entities", "loss_fn"))
+def train_step_fn(
+    model: nnx.Module,
+    optimizer: nnx.Optimizer,
+    neg_key: jax.Array,
+    batch: jnp.ndarray,
+    num_negative_samples: int,
+    num_entities: int,
+    loss_fn: Any,
+) -> jnp.ndarray:
+    """
+    A JIT-optimised function to take a training step for KGE model. This function
+    generates negative samples, computes the loss, and updates model parameters.
 
-    def loss_on_model(m):
-        neg = uniform_balanced_sampler(batch, num_entities, negative_samples, neg_key)
+
+    :param model: KGE model
+    :type model: nnx.Module
+    :param optimizer: Optimizer bound to model parameters
+    :type optimizer: nnx.Optimizer
+    :param neg_key: JAX random key for negative sampling
+    :type neg_key: jax.Array
+    :param batch: Input batch of positive triples
+    :type batch: jnp.ndarray
+    :param num_negative_samples: Number of negative samples per positive
+    :type num_negative_samples: int
+    :param num_entities: Total number of entities in the knowledge graph
+    :type num_entities: int
+    :param loss_fn: Loss function to use
+    :type loss_fn: Any
+    :return: Computed loss value
+    :rtype: jnp.ndarray
+    """
+
+    def loss_on_model(m: nnx.Module) -> jnp.ndarray:
+        neg = uniform_balanced_sampler(triples=batch, num_entities=num_entities, k=num_negative_samples, key=neg_key)
         neg = neg.reshape(-1, 3)
 
         return loss_fn(m, batch, neg)
 
     loss, grads = nnx.value_and_grad(loss_on_model)(model)
     optimizer.update(model, grads)
+
     return loss
-
-
-@partial(nnx.jit, static_argnames=("negative_samples", "num_entities", "loss_fn"))
-def eval_step_fn(model, neg_key, batch, *, negative_samples, num_entities, loss_fn):
-    """Eval step that takes a raw JAX key"""
-    neg = uniform_balanced_sampler(batch, num_entities, negative_samples, neg_key).reshape(-1, 3)
-    return loss_fn(model, batch, neg)
 
 
 # ----------------------------- #
@@ -136,7 +161,7 @@ class KGEPipeline:
                 # Generate key for this step
                 step_key = self._make_step_key(global_step, phase=0)
 
-                # JITed step (mutates model via optimizer in-place)
+                # JITed train step
                 loss = train_step_fn(
                     self.model,
                     self.optimizer,
@@ -145,7 +170,7 @@ class KGEPipeline:
                     self.negative_samples,
                     self.dataset.num_entities,
                     self.loss_fn,
-                )
+                )  # ignore: type
 
                 epoch_losses.append(float(loss))
                 global_step += 1
@@ -161,27 +186,73 @@ class KGEPipeline:
             "seed": self.seed,
         }
 
-    def evaluate(self, split: str = "valid", max_batches: int | None = None) -> float:
+    def evaluate(
+        self,
+        split: str = "test",
+        corruption_side: str = "both",
+        filtered: bool = True,
+        max_triples: int | None = None,
+    ) -> Dict[str, float]:
         """
-        Simple evaluation over a split using disjoint RNG phase (=1).
-        Typically deterministic (no dropout).
+        Evaluate model using ranking metrics (MRR, MR, Hits@K).
+
+        :param split: Which split to evaluate on ('train', 'valid', 'test')
+        :param corruption_side: Corrupt 'head', 'tail', or 'both'
+        :param filtered: Use filtered evaluation (exclude other known true triples)
+        :param max_triples: Limit number of triples to evaluate (for speed)
+        :return: Dictionary of ranking metrics
         """
-        losses = []
-        for i, batch in enumerate(self.dataset.iter_batches(split)):
-            if max_batches is not None and i >= max_batches:
-                break
-            batch = jnp.array(batch)
+        # Get test triples
+        split_map = {"train": self.dataset.train_df, "valid": self.dataset.val_df, "test": self.dataset.test_df}
+        test_df = split_map[split]
 
-            # Generate key for eval step
-            step_key = self._make_step_key(i, phase=1)
+        test_triples = test_df.to_numpy()
+        if max_triples is not None:
+            test_triples = test_triples[:max_triples]
+        test_triples = jnp.array(test_triples, dtype=jnp.int32)
 
-            loss = eval_step_fn(
-                self.model,
-                step_key,
-                batch,
-                negative_samples=self.negative_samples,
-                num_entities=self.dataset.num_entities,
-                loss_fn=self.loss_fn,
+        # Get all known triples for filtering
+        filter_triples = None
+        if filtered:
+            all_triples = jnp.concatenate(
+                [
+                    jnp.array(self.dataset.train_df.to_numpy(), dtype=jnp.int32),
+                    jnp.array(self.dataset.val_df.to_numpy(), dtype=jnp.int32),
+                    jnp.array(self.dataset.test_df.to_numpy(), dtype=jnp.int32),
+                ]
             )
-            losses.append(float(loss))
-        return float(jnp.mean(jnp.array(losses))) if losses else float("nan")
+            filter_triples = all_triples
+
+        # Determine which sides to evaluate
+        sides = ["tail", "head"] if corruption_side == "both" else [corruption_side]
+
+        print(f"Evaluating on {len(test_triples)} triples (corruption: {corruption_side}, filtered: {filtered})...")
+
+        all_ranks = []
+
+        # Process each triple
+        for i, triple in enumerate(test_triples):
+            if (i + 1) % 100 == 0:
+                print(f"  Processed {i + 1}/{len(test_triples)} triples...")
+
+            for side in sides:
+                rank = rank_triple(
+                    self.model,
+                    triple,
+                    self.dataset.num_entities,
+                    corruption_side=cast(Literal["head", "tail"], side),
+                    filter_triples=filter_triples,
+                )
+                all_ranks.append(int(rank))
+
+        # Compute metrics from ranks
+        metrics = compute_metrics_from_ranks(jnp.array(all_ranks))
+
+        print(f"\nRanking Results ({split} set, {corruption_side} corruption):")
+        print(f"  MRR: {metrics['mrr']:.4f}")
+        print(f"  MR: {metrics['mr']:.2f}")
+        print(f"  Hits@1: {metrics['hits@1']:.4f}")
+        print(f"  Hits@3: {metrics['hits@3']:.4f}")
+        print(f"  Hits@10: {metrics['hits@10']:.4f}")
+
+        return metrics
