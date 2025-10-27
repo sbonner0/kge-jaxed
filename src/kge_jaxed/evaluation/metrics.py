@@ -1,11 +1,9 @@
 """Ranking Metrics."""
 
-from typing import Dict
-
 import jax.numpy as jnp
 
 
-def compute_metrics_from_ranks(ranks: jnp.ndarray) -> Dict[str, float]:
+def compute_metrics_from_ranks(ranks: jnp.ndarray) -> dict[str, float]:
     """
     Compute standard KGE metrics from a list of ranks.
 

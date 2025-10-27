@@ -51,7 +51,6 @@ class PyKEENDataset(BaseDataset):
 
 
 if __name__ == "__main__":
-
     dataset = PyKEENDataset(dataset_name="nations", batch_size=32, shuffle=True)
 
     train_dataset = dataset.iter_batches("train")
