@@ -20,7 +20,6 @@ class TransE(BaseKGE):
         self.norm = norm
 
     def interaction_function(self, h: Array, r: Array, t: Array) -> Array:
-
         score = h + r - t
         return -jnp.linalg.norm(score, ord=self.norm, axis=1)
 

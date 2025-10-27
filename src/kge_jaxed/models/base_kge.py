@@ -1,7 +1,6 @@
 """The base class for knowledge graph embedding models."""
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
 from flax import nnx
 from jax import Array
@@ -10,7 +9,6 @@ from kge_jaxed.models.base_embedding import BaseEmbedding
 
 
 class BaseKGE(ABC, nnx.Module):
-
     def __init__(
         self,
         num_entities: int,
@@ -49,7 +47,6 @@ class BaseKGE(ABC, nnx.Module):
         )
 
     def score_hrt(self, triples: Array) -> Array:
-
         h = self.entity_embedding(triples[:, 0])
         r = self.relation_embedding(triples[:, 1])
         t = self.entity_embedding(triples[:, 2])

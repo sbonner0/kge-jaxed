@@ -31,3 +31,22 @@ include = ["kge_jaxed*"]  # Adjust to match your package name
 [tool.setuptools_scm]
 fallback_version = "0.1.0"
 write_to = "src/kge_jaxed/_version.py"  # Generates a version file
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    # pycodestyle
+    "E",
+    # Pyflakes
+    "F",
+    # pyupgrade
+    "UP",
+    # flake8-bugbear
+    "B",
+    # flake8-simplify
+    "SIM",
+    # isort
+    "I",
+]

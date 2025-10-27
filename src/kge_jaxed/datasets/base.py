@@ -1,7 +1,8 @@
 """Base class for creating Knowledge Graph grain datasets from pandas DataFrames."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Literal, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any, Literal
 
 import grain  # type: ignore
 import numpy as np
@@ -15,7 +16,7 @@ class PandasArraySource(grain.sources.RandomAccessDataSource):
     Minimal random-access data source for Grain from a pandas DataFrame.
     """
 
-    def __init__(self, df: pd.DataFrame, columns: Optional[Sequence[str]] = None):
+    def __init__(self, df: pd.DataFrame, columns: Sequence[str] | None = None):
         """
         Minimal random-access data source for Grain from a pandas DataFrame.
 

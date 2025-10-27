@@ -49,7 +49,6 @@ def uniform_balanced_sampler(
 
 
 if __name__ == "__main__":
-
     # Example usage
     triples = jnp.array([[0, 0, 1], [2, 1, 3], [4, 0, 5]], dtype=jnp.int32)
     num_entities = 6

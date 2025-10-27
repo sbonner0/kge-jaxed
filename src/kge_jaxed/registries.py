@@ -1,9 +1,10 @@
-from typing import Any, Callable, Dict
+from collections.abc import Callable
+from typing import Any
 
 
 class Registry:
     def __init__(self) -> None:
-        self._store: Dict[str, Any] = {}
+        self._store: dict[str, Any] = {}
 
     def register(self, name: str | None = None) -> Callable:
         """

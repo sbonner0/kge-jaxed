@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Any, Dict, Literal, cast
+from typing import Any, Literal, cast
 
 import jax
 import jax.numpy as jnp
@@ -10,8 +10,6 @@ from kge_jaxed.datasets.base import BaseDataset
 from kge_jaxed.datasets.pykeen_datasets import PyKEENDataset
 from kge_jaxed.evaluation.metrics import compute_metrics_from_ranks
 from kge_jaxed.evaluation.utils import rank_triple
-from kge_jaxed.loss_functions.losses import bce_loss, margin_ranking_loss
-from kge_jaxed.models.transe import TransE
 from kge_jaxed.negative_sampling.uniform_negative_sampling import (
     uniform_balanced_sampler,
 )
@@ -56,7 +54,12 @@ def train_step_fn(
     """
 
     def loss_on_model(m: nnx.Module) -> jnp.ndarray:
-        neg = uniform_balanced_sampler(triples=batch, num_entities=num_entities, k=num_negative_samples, key=neg_key)
+        neg = uniform_balanced_sampler(
+            triples=batch,
+            num_entities=num_entities,
+            k=num_negative_samples,
+            key=neg_key,
+        )
         neg = neg.reshape(-1, 3)
 
         return loss_fn(m, batch, neg)
@@ -143,7 +146,7 @@ class KGEPipeline:
 
     # -------- Training / eval loops -------- #
 
-    def train(self, epochs: int = 100, log_every: int = 10) -> Dict[str, Any]:
+    def train(self, epochs: int = 100, log_every: int = 10) -> dict[str, Any]:
         """
         Train loop. Deterministic RNGs derived from (seed, process, phase=0, global_step).
         """
@@ -192,7 +195,7 @@ class KGEPipeline:
         corruption_side: str = "both",
         filtered: bool = True,
         max_triples: int | None = None,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Evaluate model using ranking metrics (MRR, MR, Hits@K).
 
@@ -203,7 +206,11 @@ class KGEPipeline:
         :return: Dictionary of ranking metrics
         """
         # Get test triples
-        split_map = {"train": self.dataset.train_df, "valid": self.dataset.val_df, "test": self.dataset.test_df}
+        split_map = {
+            "train": self.dataset.train_df,
+            "valid": self.dataset.val_df,
+            "test": self.dataset.test_df,
+        }
         test_df = split_map[split]
 
         test_triples = test_df.to_numpy()
