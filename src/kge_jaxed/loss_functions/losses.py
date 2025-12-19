@@ -3,10 +3,7 @@
 import jax.numpy as jnp
 import optax
 
-from kge_jaxed.registries import LOSSES
 
-
-@LOSSES.register("mrl")
 def margin_ranking_loss(model, batch, neg_batch, margin=1.0):
     """
     Margin Ranking Loss for KGE models with multiple negatives per positive.
@@ -32,7 +29,6 @@ def margin_ranking_loss(model, batch, neg_batch, margin=1.0):
     return jnp.mean(loss)
 
 
-@LOSSES.register("bce")
 def bce_loss(
     model,
     batch,

@@ -3,10 +3,8 @@ from flax import nnx
 from jax import Array
 
 from kge_jaxed.models.base_kge import BaseKGE
-from kge_jaxed.registries import MODELS
 
 
-@MODELS.register("transe")
 class TransE(BaseKGE):
     def __init__(
         self,

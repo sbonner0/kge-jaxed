@@ -1,49 +1,72 @@
-from collections.abc import Callable
-from typing import Any
+"""Central registry for all models, losses, and samplers."""
+
+from kge_jaxed.loss_functions.losses import bce_loss, margin_ranking_loss
+from kge_jaxed.models.distmult import DistMult
+from kge_jaxed.models.transe import TransE
+
+# Import samplers
+from kge_jaxed.negative_sampling.uniform_negative_sampling import uniform_balanced_sampler
+
+# ============================================
+# Model Registry
+# ============================================
+MODELS = {
+    "transe": TransE,
+    "distmult": DistMult,
+}
 
 
-class Registry:
-    def __init__(self) -> None:
-        self._store: dict[str, Any] = {}
-
-    def register(self, name: str | None = None) -> Callable:
-        """
-        Decorator to register a class or function.
-
-        Usage:
-            @MODELS.register("transe")
-            class TransE(...):
-                ...
-
-            @LOSSES.register("mrl")
-            def margin_ranking_loss(...):
-                ...
-        """
-
-        def deco(obj: Any) -> Any:
-            key = name or obj.__name__.lower()
-            if key in self._store:
-                raise ValueError(f"Duplicate key '{key}' in registry")
-            self._store[key] = obj
-            return obj
-
-        return deco
-
-    def get(self, name: str) -> Any:
-        if name not in self._store:
-            raise KeyError(f"{name} not found. Available: {list(self._store)}")
-        return self._store[name]
-
-    def available(self) -> list[str]:
-        return list(self._store.keys())
-
-    def __contains__(self, name: str) -> bool:
-        return name in self._store
-
-    def __iter__(self):
-        return iter(self._store.items())
+# ============================================
+# Loss Registry
+# ============================================
+LOSSES = {
+    "mrl": margin_ranking_loss,
+    "bce": bce_loss,
+}
 
 
-MODELS = Registry()
-LOSSES = Registry()
-NEGATIVE_SAMPLERS = Registry()
+# ============================================
+# Sampler Registry
+# ============================================
+NEGATIVE_SAMPLERS = {
+    "uniform": uniform_balanced_sampler,
+}
+
+
+# ============================================
+# Helper Functions
+# ============================================
+def get_model(name: str):
+    """Get model class by name."""
+    if name not in MODELS:
+        raise ValueError(f"Unknown model '{name}'. Available: {list(MODELS.keys())}")
+    return MODELS[name]
+
+
+def get_loss(name: str):
+    """Get loss function by name."""
+    if name not in LOSSES:
+        raise ValueError(f"Unknown loss '{name}'. Available: {list(LOSSES.keys())}")
+    return LOSSES[name]
+
+
+def get_sampler(name: str):
+    """Get negative sampler by name."""
+    if name not in NEGATIVE_SAMPLERS:
+        raise ValueError(f"Unknown sampler '{name}'. Available: {list(NEGATIVE_SAMPLERS.keys())}")
+    return NEGATIVE_SAMPLERS[name]
+
+
+def list_models():
+    """Return list of available model names."""
+    return list(MODELS.keys())
+
+
+def list_losses():
+    """Return list of available loss names."""
+    return list(LOSSES.keys())
+
+
+def list_samplers():
+    """Return list of available sampler names."""
+    return list(NEGATIVE_SAMPLERS.keys())
