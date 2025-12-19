@@ -100,8 +100,8 @@ class KGEPipeline:
             self.dataset = dataset
 
         # Get model and loss from registries
-        model_cls = MODELS.get(model_name)
-        self.loss_fn = LOSSES.get(loss_name)
+        model_cls = MODELS[model_name]
+        self.loss_fn = LOSSES[loss_name]
 
         # Keys: base -> split for init vs training
         self.base_key = self._make_base_key(self.seed)
