@@ -1,14 +1,15 @@
 from functools import partial
-from typing import Any, Literal, cast
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 import optax
+import pandas as pd
 from flax import nnx
 
 from kge_jaxed.datasets.base import BaseDataset
 from kge_jaxed.datasets.pykeen_datasets import PyKEENDataset
-from kge_jaxed.evaluation.metrics import compute_metrics_from_ranks
+from kge_jaxed.evaluation.metrics import compute_metrics_dataframe
 from kge_jaxed.evaluation.utils import rank_triple
 from kge_jaxed.negative_sampling.uniform_negative_sampling import (
     uniform_balanced_sampler,
@@ -87,7 +88,7 @@ class KGEPipeline:
         learning_rate: float = 1e-3,
         seed: int = 42,
         **model_kwargs: Any,
-    ):
+    ) -> None:
         """Initialize the KGE training pipeline."""
         self.negative_samples = int(negative_samples)
         self.learning_rate = float(learning_rate)
@@ -192,18 +193,18 @@ class KGEPipeline:
     def evaluate(
         self,
         split: str = "test",
-        corruption_side: str = "both",
         filtered: bool = True,
         max_triples: int | None = None,
-    ) -> dict[str, float]:
+        return_ranks_df: bool = False,
+    ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
         """
         Evaluate model using ranking metrics (MRR, MR, Hits@K).
 
         :param split: Which split to evaluate on ('train', 'valid', 'test')
-        :param corruption_side: Corrupt 'head', 'tail', or 'both'
         :param filtered: Use filtered evaluation (exclude other known true triples)
         :param max_triples: Limit number of triples to evaluate (for speed)
-        :return: Dictionary of ranking metrics
+        :param return_ranks_df: Return the evaluation triples with head/tail ranks
+        :return: Metrics DataFrame, and optionally the ranked triples DataFrame
         """
         # Get test triples
         split_map = {
@@ -212,11 +213,9 @@ class KGEPipeline:
             "test": self.dataset.test_df,
         }
         test_df = split_map[split]
+        eval_df = test_df if max_triples is None else test_df.iloc[:max_triples]
 
-        test_triples = test_df.to_numpy()
-        if max_triples is not None:
-            test_triples = test_triples[:max_triples]
-        test_triples = jnp.array(test_triples, dtype=jnp.int32)
+        test_triples = jnp.array(eval_df.to_numpy(), dtype=jnp.int32)
 
         # Get all known triples for filtering
         filter_triples = None
@@ -230,14 +229,15 @@ class KGEPipeline:
             )
             filter_triples = all_triples
 
-        # Determine which sides to evaluate
-        sides = ["tail", "head"] if corruption_side == "both" else [corruption_side]
+        # Always evaluate both sides (head and tail)
+        sides = ["tail", "head"]
 
-        print(f"Evaluating on {len(test_triples)} triples (corruption: {corruption_side}, filtered: {filtered})...")
+        print(f"Evaluating on {len(test_triples)} triples (corruption: both, filtered: {filtered})...")
 
-        all_ranks = []
+        head_ranks: list[int] = []
+        tail_ranks: list[int] = []
 
-        # Process each triple
+        # Process each triple and compute ranks
         for i, triple in enumerate(test_triples):
             if (i + 1) % 100 == 0:
                 print(f"  Processed {i + 1}/{len(test_triples)} triples...")
@@ -247,19 +247,25 @@ class KGEPipeline:
                     self.model,
                     triple,
                     self.dataset.num_entities,
-                    corruption_side=cast(Literal["head", "tail"], side),
+                    corruption_side=side,
                     filter_triples=filter_triples,
                 )
-                all_ranks.append(int(rank))
+                if side == "head":
+                    head_ranks.append(int(rank))
+                else:
+                    tail_ranks.append(int(rank))
 
-        # Compute metrics from ranks
-        metrics = compute_metrics_from_ranks(jnp.array(all_ranks))
+        # Compute metrics from ranks (per side + average)
+        metrics_df = compute_metrics_dataframe(head_ranks, tail_ranks)
 
-        print(f"\nRanking Results ({split} set, {corruption_side} corruption):")
-        print(f"  MRR: {metrics['mrr']:.4f}")
-        print(f"  MR: {metrics['mr']:.2f}")
-        print(f"  Hits@1: {metrics['hits@1']:.4f}")
-        print(f"  Hits@3: {metrics['hits@3']:.4f}")
-        print(f"  Hits@10: {metrics['hits@10']:.4f}")
+        print(f"\nRanking Results ({split} set, both corruption):")
+        print(metrics_df)
 
-        return metrics
+        if not return_ranks_df:
+            return metrics_df
+
+        ranks_df = eval_df.copy()
+        ranks_df["rank_head"] = head_ranks
+        ranks_df["rank_tail"] = tail_ranks
+
+        return metrics_df, ranks_df
