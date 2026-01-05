@@ -15,6 +15,7 @@ from kge_jaxed.negative_sampling.uniform_negative_sampling import (
     uniform_balanced_sampler,
 )
 from kge_jaxed.registries import LOSSES, MODELS
+from kge_jaxed.rngs import RngManager, make_model_rngs
 
 # ----------------------------- #
 # JIT-friendly step function   #
@@ -25,7 +26,7 @@ from kge_jaxed.registries import LOSSES, MODELS
 def train_step_fn(
     model: nnx.Module,
     optimizer: nnx.Optimizer,
-    neg_key: jax.Array,
+    step_key: jax.Array,
     batch: jnp.ndarray,
     num_negative_samples: int,
     num_entities: int,
@@ -40,8 +41,8 @@ def train_step_fn(
     :type model: nnx.Module
     :param optimizer: Optimizer bound to model parameters
     :type optimizer: nnx.Optimizer
-    :param neg_key: JAX random key for negative sampling
-    :type neg_key: jax.Array
+    :param step_key: JAX random key for this training step
+    :type step_key: jax.Array
     :param batch: Input batch of positive triples
     :type batch: jnp.ndarray
     :param num_negative_samples: Number of negative samples per positive
@@ -55,6 +56,8 @@ def train_step_fn(
     """
 
     def loss_on_model(m: nnx.Module) -> jnp.ndarray:
+        neg_key, dropout_key = jax.random.split(step_key, 2)
+        dropout_rngs = nnx.Rngs(dropout=dropout_key)
         neg = uniform_balanced_sampler(
             triples=batch,
             num_entities=num_entities,
@@ -63,7 +66,7 @@ def train_step_fn(
         )
         neg = neg.reshape(-1, 3)
 
-        return loss_fn(m, batch, neg)
+        return loss_fn(m, batch, neg, dropout_rngs=dropout_rngs)
 
     loss, grads = nnx.value_and_grad(loss_on_model)(model)
     optimizer.update(model, grads)
@@ -87,16 +90,25 @@ class KGEPipeline:
         negative_samples: int = 1,
         learning_rate: float = 1e-3,
         seed: int = 42,
+        model_seed: int | None = None,
+        dataset_seed: int | None = None,
         **model_kwargs: Any,
     ) -> None:
         """Initialize the KGE training pipeline."""
+
         self.negative_samples = int(negative_samples)
         self.learning_rate = float(learning_rate)
         self.seed = int(seed)
+        self.model_seed = None if model_seed is None else int(model_seed)
+        self.dataset_seed = int(self.seed if dataset_seed is None else dataset_seed)
 
         # Sort out dataset input
         if isinstance(dataset, str):
-            self.dataset = PyKEENDataset(dataset_name=dataset, batch_size=train_batch_size)
+            self.dataset = PyKEENDataset(
+                dataset_name=dataset,
+                batch_size=train_batch_size,
+                seed=self.dataset_seed,
+            )
         elif isinstance(dataset, BaseDataset):
             self.dataset = dataset
 
@@ -105,11 +117,9 @@ class KGEPipeline:
         self.loss_fn = LOSSES[loss_name]
 
         # Keys: base -> split for init vs training
-        self.base_key = self._make_base_key(self.seed)
-        self.init_key, self.train_key = jax.random.split(self.base_key)
-
-        # Dedicated init RNGs (separate from training steps)
-        init_rngs = self._make_init_rngs(self.init_key)
+        # Dedicated RNGs (separate model init from training steps)
+        self.rng_manager = RngManager(self.seed)
+        init_rngs = self.rng_manager.init_rngs() if self.model_seed is None else make_model_rngs(self.model_seed)
 
         # Build model
         self.model = model_cls(
@@ -125,25 +135,12 @@ class KGEPipeline:
 
     # -------- RNG helpers -------- #
 
-    @staticmethod
-    def _make_base_key(seed: int) -> jax.Array:
-        """Seeded, multi-host-safe base key."""
-        base = jax.random.PRNGKey(seed)
-        return jax.random.fold_in(base, jax.process_index())
-
-    @staticmethod
-    def _make_init_rngs(init_key: jax.Array) -> nnx.Rngs:
-        """One-off RNGs for parameter initialization (kept disjoint from training)."""
-        k_params, k_dropout, k_neg = jax.random.split(init_key, 3)
-        return nnx.Rngs(params=k_params, dropout=k_dropout, neg=k_neg)
-
     def _make_step_key(self, step: int, phase: int = 0) -> jax.Array:
         """
         Generate a JAX key for a specific step.
         phase=0 → train; phase=1 → eval (keeps streams disjoint).
         """
-        k = jax.random.fold_in(self.train_key, phase)
-        return jax.random.fold_in(k, int(step))
+        return self.rng_manager.step_key(step, phase=phase)
 
     # -------- Training / eval loops -------- #
 

@@ -6,6 +6,7 @@ from flax import nnx
 from jax import Array
 
 from kge_jaxed.models.base_embedding import BaseEmbedding
+from kge_jaxed.rngs import make_model_rngs
 
 
 class BaseKGE(ABC, nnx.Module):
@@ -16,7 +17,8 @@ class BaseKGE(ABC, nnx.Module):
         embedding_dim: int,
         entity_embedding_kwargs: dict = {},
         relation_embedding_kwargs: dict = {},
-        rngs: nnx.Rngs = nnx.Rngs(0),
+        rngs: nnx.Rngs | None = None,
+        seed: int | None = None,
     ) -> None:
         """
         Initialize the base class for knowledge graph embedding models.
@@ -31,9 +33,16 @@ class BaseKGE(ABC, nnx.Module):
         :type entity_embedding_kwargs: dict, optional
         :param relation_embedding_kwargs: Args for the relation embedding, defaults to {}
         :type relation_embedding_kwargs: dict, optional
-        :param rngs: RNGs for the module, defaults to nnx.Rngs(0)
+        :param rngs: RNGs for the module, required unless a seed is provided
         :type rngs: nnx.Rngs, optional
+        :param seed: Seed to initialize RNG streams if rngs is not provided
+        :type seed: int, optional
         """
+
+        if rngs is None:
+            if seed is None:
+                raise ValueError("BaseKGE requires rngs or seed to be provided.")
+            rngs = make_model_rngs(seed)
 
         self.num_entities = num_entities
         self.num_relations = num_relations
@@ -46,10 +55,15 @@ class BaseKGE(ABC, nnx.Module):
             num_embeddings=self.num_relations, embedding_dim=self.embedding_dim, **relation_embedding_kwargs, rngs=rngs
         )
 
-    def score_hrt(self, triples: Array) -> Array:
-        h = self.entity_embedding(triples[:, 0])
-        r = self.relation_embedding(triples[:, 1])
-        t = self.entity_embedding(triples[:, 2])
+    def score_hrt(self, triples: Array, *, dropout_rngs: nnx.Rngs | None = None) -> Array:
+        if dropout_rngs is None:
+            h = self.entity_embedding(triples[:, 0])
+            r = self.relation_embedding(triples[:, 1])
+            t = self.entity_embedding(triples[:, 2])
+        else:
+            h = self.entity_embedding(triples[:, 0], rngs=dropout_rngs)
+            r = self.relation_embedding(triples[:, 1], rngs=dropout_rngs)
+            t = self.entity_embedding(triples[:, 2], rngs=dropout_rngs)
 
         return self.interaction_function(h, r, t)
 
