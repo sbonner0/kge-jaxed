@@ -30,8 +30,6 @@ class PyKEENDataset(BaseDataset):
         :type shuffle: bool, optional
         :param seed: Random seed for shuffling, defaults to 0
         :type seed: int, optional
-        :param split_seed: Random seed for dataset splitting, defaults to None
-        :type split_seed: int, optional
         """
         super().__init__(batch_size=batch_size, shuffle=shuffle, seed=seed)
         self.dataset_name = dataset_name
