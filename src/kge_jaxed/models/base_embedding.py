@@ -2,6 +2,8 @@ import jax.numpy as jnp
 from flax import nnx
 from flax.typing import Dtype
 
+from kge_jaxed.rngs import make_model_rngs
+
 
 class BaseEmbedding(nnx.Module):
     """
@@ -14,7 +16,8 @@ class BaseEmbedding(nnx.Module):
         embedding_dim: int,
         dropout_rate: float = 0.0,
         param_dtype: Dtype = jnp.float32,
-        rngs: nnx.Rngs = nnx.Rngs(0),
+        rngs: nnx.Rngs | None = None,
+        seed: int | None = None,
         **kwargs,
     ) -> None:
         """
@@ -28,14 +31,20 @@ class BaseEmbedding(nnx.Module):
         :type dropout_rate: float, optional
         :param param_dtype: Data type for the parameters, defaults to jnp.float32
         :type param_dtype: Dtype, optional
-        :param rngs: RNGs for the module, defaults to nnx.Rngs(0)
+        :param rngs: RNGs for the module, required unless a seed is provided
         :type rngs: nnx.Rngs, optional
+        :param seed: Seed to initialize RNG streams if rngs is not provided
+        :type seed: int, optional
         """
 
         super().__init__()
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
         self.dropout_rate = dropout_rate
+        if rngs is None:
+            if seed is None:
+                raise ValueError("BaseEmbedding requires rngs or seed to be provided.")
+            rngs = make_model_rngs(seed)
 
         self.emb = nnx.Embed(
             num_embeddings=self.num_embeddings,
@@ -46,7 +55,7 @@ class BaseEmbedding(nnx.Module):
         )
         self.dropout = nnx.Dropout(rate=self.dropout_rate, rngs=rngs)
 
-    def __call__(self, x):
+    def __call__(self, x, *, rngs: nnx.Rngs | None = None):
         x = self.emb(x)
-        x = self.dropout(x)
+        x = self.dropout(x) if rngs is None else self.dropout(x, rngs=rngs)
         return x

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "kge_jaxed"
 dynamic = ["version"]  # Version managed by setuptools-scm
-description = "A simple and lightweight package for knowledge graph embedding using JAX"
+description = "A simple and lightweight package for knowledge graph embedding using JAX and FlaxNNX."
 readme = "README.md"
 authors = [
     { name = "Stephen Bonner"} 
@@ -25,8 +25,8 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["src"]  # If using a src layout, otherwise remove this
-include = ["kge_jaxed*"]  # Adjust to match your package name
+where = ["src"] 
+include = ["kge_jaxed*"] 
 
 [tool.setuptools_scm]
 fallback_version = "0.1.0"
@@ -50,3 +50,12 @@ select = [
     # isort
     "I",
 ]
+
+[tool.tox]
+envlist = ["test"]
+isolated_build = true
+requires = ["tox"]
+
+[tool.tox.envs.test]
+deps = ["pytest"]
+commands = ["pytest tests/*"]

@@ -2,9 +2,10 @@
 
 import jax.numpy as jnp
 import optax
+from flax import nnx
 
 
-def margin_ranking_loss(model, batch, neg_batch, margin=1.0):
+def margin_ranking_loss(model, batch, neg_batch, margin=1.0, *, dropout_rngs: nnx.Rngs | None = None):
     """
     Margin Ranking Loss for KGE models with multiple negatives per positive.
 
@@ -12,16 +13,19 @@ def margin_ranking_loss(model, batch, neg_batch, margin=1.0):
     :param batch: Positive triples [B, 3]
     :param neg_batch: Negative triples [B*K, 3] (reshaped from [B, K, 3])
     :param margin: Margin value, defaults to 1.0
+    :param dropout_rngs: Optional rngs for dropout during scoring
     :return: Scalar loss value
     """
     B = batch.shape[0]
     K = neg_batch.shape[0] // B
 
     # Score positives: [B]
-    pos_scores = model.score_hrt(batch)
-
-    # Score negatives: [B*K] then reshape to [B, K]
-    neg_scores = model.score_hrt(neg_batch).reshape(B, K)
+    if dropout_rngs is None:
+        pos_scores = model.score_hrt(batch)
+        neg_scores = model.score_hrt(neg_batch).reshape(B, K)
+    else:
+        pos_scores = model.score_hrt(batch, dropout_rngs=dropout_rngs)
+        neg_scores = model.score_hrt(neg_batch, dropout_rngs=dropout_rngs).reshape(B, K)
 
     # Broadcast pos_scores [B] -> [B, 1] to compare with neg_scores [B, K]
     loss = jnp.maximum(0, margin - pos_scores[:, None] + neg_scores)
@@ -29,11 +33,7 @@ def margin_ranking_loss(model, batch, neg_batch, margin=1.0):
     return jnp.mean(loss)
 
 
-def bce_loss(
-    model,
-    batch,
-    neg_batch,
-):
+def bce_loss(model, batch, neg_batch, *, dropout_rngs: nnx.Rngs | None = None):
     """
     Binary Cross-Entropy loss for KGE models.
 
@@ -43,12 +43,16 @@ def bce_loss(
     :type batch: _type_
     :param neg_batch: _description_
     :type neg_batch: _type_
+    :param dropout_rngs: Optional rngs for dropout during scoring
     :return: _description_
     :rtype: _type_
     """
-
-    pos_scores = model.score_hrt(batch)
-    neg_scores = model.score_hrt(neg_batch)
+    if dropout_rngs is None:
+        pos_scores = model.score_hrt(batch)
+        neg_scores = model.score_hrt(neg_batch)
+    else:
+        pos_scores = model.score_hrt(batch, dropout_rngs=dropout_rngs)
+        neg_scores = model.score_hrt(neg_batch, dropout_rngs=dropout_rngs)
 
     logits = jnp.concatenate([pos_scores, neg_scores])
     labels = jnp.concatenate([jnp.ones_like(pos_scores), jnp.zeros_like(neg_scores)])

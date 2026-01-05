@@ -8,10 +8,17 @@ from kge_jaxed.datasets.base import BaseDataset  # type: ignore
 
 class PyKEENDataset(BaseDataset):
     """
-    Uses PyKEEN built-in datasets to create knowledge graphs.
+    Uses PyKEEN built-in datasets to create knowledge graphs. See https://pykeen.readthedocs.io/en/stable/api/pykeen.datasets.Dataset.html
+    for all of the available datasets.
     """
 
-    def __init__(self, dataset_name: str, batch_size: int = 32, shuffle: bool = True) -> None:
+    def __init__(
+        self,
+        dataset_name: str,
+        batch_size: int = 32,
+        shuffle: bool = True,
+        seed: int = 0,
+    ) -> None:
         """
         Uses PyKEEN built-in datasets to create knowledge graphs.
 
@@ -21,8 +28,12 @@ class PyKEENDataset(BaseDataset):
         :type batch_size: int, optional
         :param shuffle: Whether to shuffle the dataset, defaults to True
         :type shuffle: bool, optional
+        :param seed: Random seed for shuffling, defaults to 0
+        :type seed: int, optional
+        :param split_seed: Random seed for dataset splitting, defaults to None
+        :type split_seed: int, optional
         """
-        super().__init__(batch_size, shuffle)
+        super().__init__(batch_size=batch_size, shuffle=shuffle, seed=seed)
         self.dataset_name = dataset_name
         self.load_data()
 
