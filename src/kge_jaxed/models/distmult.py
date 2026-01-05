@@ -11,11 +11,15 @@ class DistMult(BaseKGE):
         num_entities: int,
         num_relations: int,
         embedding_dim: int,
-        entity_embedding_kwargs: dict = {},
-        relation_embedding_kwargs: dict = {},
+        entity_embedding_kwargs: dict | None = None,
+        relation_embedding_kwargs: dict | None = None,
         rngs: nnx.Rngs | None = None,
         seed: int | None = None,
     ) -> None:
+        if entity_embedding_kwargs is None:
+            entity_embedding_kwargs = {}
+        if relation_embedding_kwargs is None:
+            relation_embedding_kwargs = {}
         super().__init__(
             num_entities,
             num_relations,
