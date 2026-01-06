@@ -2,58 +2,43 @@
 
 import jax.numpy as jnp
 import optax
-from flax import nnx
 
 
-def margin_ranking_loss(model, batch, neg_batch, margin=1.0, *, dropout_rngs: nnx.Rngs | None = None):
+def margin_ranking_loss(
+    pos_scores: jnp.ndarray,
+    neg_scores: jnp.ndarray,
+    margin: float = 1.0,
+) -> jnp.ndarray:
     """
-    Margin Ranking Loss for KGE models with multiple negatives per positive.
+    Margin ranking loss from precomputed scores.
 
-    :param model: KGE model with score_hrt method
-    :param batch: Positive triples [B, 3]
-    :param neg_batch: Negative triples [B*K, 3] (reshaped from [B, K, 3])
+    :param pos_scores: Positive scores [B]
+    :param neg_scores: Negative scores [B, K]
     :param margin: Margin value, defaults to 1.0
-    :param dropout_rngs: Optional rngs for dropout during scoring
     :return: Scalar loss value
     """
-    B = batch.shape[0]
-    K = neg_batch.shape[0] // B
-
-    # Score positives: [B]
-    if dropout_rngs is None:
-        pos_scores = model.score_hrt(batch)
-        neg_scores = model.score_hrt(neg_batch).reshape(B, K)
-    else:
-        pos_scores = model.score_hrt(batch, dropout_rngs=dropout_rngs)
-        neg_scores = model.score_hrt(neg_batch, dropout_rngs=dropout_rngs).reshape(B, K)
-
-    # Broadcast pos_scores [B] -> [B, 1] to compare with neg_scores [B, K]
-    loss = jnp.maximum(0, margin - pos_scores[:, None] + neg_scores)
-
+    loss = jnp.maximum(0.0, margin - pos_scores[:, None] + neg_scores)
     return jnp.mean(loss)
 
 
-def bce_loss(model, batch, neg_batch, *, dropout_rngs: nnx.Rngs | None = None):
-    """
-    Binary Cross-Entropy loss for KGE models.
+def make_margin_ranking_loss(margin: float = 1.0):
+    """Factory returning a margin ranking loss with fixed margin."""
 
-    :param model: _description_
-    :type model: _type_
-    :param batch: _description_
-    :type batch: _type_
-    :param neg_batch: _description_
-    :type neg_batch: _type_
-    :param dropout_rngs: Optional rngs for dropout during scoring
-    :return: _description_
-    :rtype: _type_
-    """
-    if dropout_rngs is None:
-        pos_scores = model.score_hrt(batch)
-        neg_scores = model.score_hrt(neg_batch)
-    else:
-        pos_scores = model.score_hrt(batch, dropout_rngs=dropout_rngs)
-        neg_scores = model.score_hrt(neg_batch, dropout_rngs=dropout_rngs)
+    def loss_fn(pos_scores: jnp.ndarray, neg_scores: jnp.ndarray) -> jnp.ndarray:
+        return margin_ranking_loss(pos_scores, neg_scores, margin=margin)
 
+    return loss_fn
+
+
+def bce_loss(pos_scores: jnp.ndarray, neg_scores: jnp.ndarray) -> jnp.ndarray:
+    """
+    Binary cross-entropy loss from precomputed scores.
+
+    :param pos_scores: Positive scores [B]
+    :param neg_scores: Negative scores [B, K] or [B * K]
+    :return: Scalar loss value
+    """
+    neg_scores = neg_scores.reshape(-1)
     logits = jnp.concatenate([pos_scores, neg_scores])
     labels = jnp.concatenate([jnp.ones_like(pos_scores), jnp.zeros_like(neg_scores)])
     return jnp.mean(optax.sigmoid_binary_cross_entropy(logits, labels))
