@@ -67,6 +67,9 @@ class BaseKGE(ABC, nnx.Module):
 
         return self.interaction_function(h, r, t)
 
+    def uses_dropout(self) -> bool:
+        return bool(self.entity_embedding.dropout_rate) or bool(self.relation_embedding.dropout_rate)
+
     @abstractmethod
     def interaction_function(self, h: Array, r: Array, t: Array) -> Array:
         raise NotImplementedError

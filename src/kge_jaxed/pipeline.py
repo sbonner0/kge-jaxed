@@ -1,5 +1,6 @@
+from collections.abc import Callable
 from functools import partial
-from typing import Any
+from typing import Any, Literal
 
 import jax
 import jax.numpy as jnp
@@ -11,6 +12,7 @@ from kge_jaxed.datasets.base import BaseDataset
 from kge_jaxed.datasets.pykeen_datasets import PyKEENDataset
 from kge_jaxed.evaluation.metrics import compute_metrics_dataframe
 from kge_jaxed.evaluation.utils import rank_triple
+from kge_jaxed.models.base_kge import BaseKGE
 from kge_jaxed.negative_sampling.uniform_negative_sampling import (
     uniform_balanced_sampler,
 )
@@ -22,15 +24,36 @@ from kge_jaxed.rngs import RngManager, make_model_rngs
 # ----------------------------- #
 
 
-@partial(nnx.jit, static_argnames=("num_negative_samples", "num_entities", "loss_fn"))
+def _score_pos_neg(
+    model: BaseKGE,
+    pos_batch: jnp.ndarray,
+    neg_batch: jnp.ndarray,
+    *,
+    dropout_rngs: nnx.Rngs | None = None,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    if dropout_rngs is None:
+        pos_scores = model.score_hrt(pos_batch)
+    else:
+        pos_scores = model.score_hrt(pos_batch, dropout_rngs=dropout_rngs)
+    neg_flat = neg_batch.reshape(-1, 3)
+    if dropout_rngs is None:
+        neg_scores = model.score_hrt(neg_flat)
+    else:
+        neg_scores = model.score_hrt(neg_flat, dropout_rngs=dropout_rngs)
+    neg_scores = neg_scores.reshape(neg_batch.shape[0], neg_batch.shape[1])
+    return pos_scores, neg_scores
+
+
+@partial(nnx.jit, static_argnames=("num_negative_samples", "num_entities", "loss_fn", "use_dropout"))
 def train_step_fn(
-    model: nnx.Module,
+    model: BaseKGE,
     optimizer: nnx.Optimizer,
     step_key: jax.Array,
     batch: jnp.ndarray,
     num_negative_samples: int,
     num_entities: int,
-    loss_fn: Any,
+    loss_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray],
+    use_dropout: bool,
 ) -> jnp.ndarray:
     """
     A JIT-optimised function to take a training step for KGE model. This function
@@ -49,24 +72,29 @@ def train_step_fn(
     :type num_negative_samples: int
     :param num_entities: Total number of entities in the knowledge graph
     :type num_entities: int
-    :param loss_fn: Loss function to use
-    :type loss_fn: Any
+    :param loss_fn: Loss function that consumes (pos_scores, neg_scores)
+    :type loss_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray]
+    :param use_dropout: Whether to pass dropout RNGs into scoring
+    :type use_dropout: bool
     :return: Computed loss value
     :rtype: jnp.ndarray
     """
 
-    def loss_on_model(m: nnx.Module) -> jnp.ndarray:
-        neg_key, dropout_key = jax.random.split(step_key, 2)
-        dropout_rngs = nnx.Rngs(dropout=dropout_key)
+    def loss_on_model(m: BaseKGE) -> jnp.ndarray:
+        if use_dropout:
+            neg_key, dropout_key = jax.random.split(step_key, 2)
+            dropout_rngs = nnx.Rngs(dropout=dropout_key)
+        else:
+            neg_key = step_key
+            dropout_rngs = None
         neg = uniform_balanced_sampler(
             triples=batch,
             num_entities=num_entities,
             k=num_negative_samples,
             key=neg_key,
         )
-        neg = neg.reshape(-1, 3)
-
-        return loss_fn(m, batch, neg, dropout_rngs=dropout_rngs)
+        pos_scores, neg_scores = _score_pos_neg(m, batch, neg, dropout_rngs=dropout_rngs)
+        return loss_fn(pos_scores, neg_scores)
 
     loss, grads = nnx.value_and_grad(loss_on_model)(model)
     optimizer.update(model, grads)
@@ -89,6 +117,7 @@ class KGEPipeline:
         embedding_dim: int = 100,
         negative_samples: int = 1,
         learning_rate: float = 1e-3,
+        use_dropout: bool | None = None,
         seed: int = 42,
         model_seed: int | None = None,
         dataset_seed: int | None = None,
@@ -103,6 +132,7 @@ class KGEPipeline:
         self.dataset_seed = int(self.seed if dataset_seed is None else dataset_seed)
 
         # Sort out dataset input
+        self.dataset: BaseDataset
         if isinstance(dataset, str):
             self.dataset = PyKEENDataset(
                 dataset_name=dataset,
@@ -122,13 +152,18 @@ class KGEPipeline:
         init_rngs = self.rng_manager.init_rngs() if self.model_seed is None else make_model_rngs(self.model_seed)
 
         # Build model
-        self.model = model_cls(
+        self.model: BaseKGE = model_cls(
             num_entities=self.dataset.num_entities,
             num_relations=self.dataset.num_relations,
             embedding_dim=embedding_dim,
             rngs=init_rngs,
             **model_kwargs,
         )
+
+        if use_dropout is None:
+            self.use_dropout = self.model.uses_dropout()
+        else:
+            self.use_dropout = bool(use_dropout)
 
         # Optimizer bound to NNX params
         self.optimizer = nnx.Optimizer(self.model, optax.adam(self.learning_rate), wrt=nnx.Param)
@@ -171,9 +206,11 @@ class KGEPipeline:
                     self.negative_samples,
                     self.dataset.num_entities,
                     self.loss_fn,
-                )  # ignore: type
+                    self.use_dropout,
+                )  # type: ignore[call-arg]
 
-                epoch_losses.append(float(loss))
+                loss_value = float(jnp.asarray(loss))
+                epoch_losses.append(loss_value)
                 global_step += 1
 
             avg_loss = float(jnp.mean(jnp.array(epoch_losses)))
@@ -227,7 +264,7 @@ class KGEPipeline:
             filter_triples = all_triples
 
         # Always evaluate both sides (head and tail)
-        sides = ["tail", "head"]
+        sides: tuple[Literal["tail", "head"], ...] = ("tail", "head")
 
         print(f"Evaluating on {len(test_triples)} triples (corruption: both, filtered: {filtered})...")
 
