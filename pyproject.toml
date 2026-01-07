@@ -52,10 +52,15 @@ select = [
 ]
 
 [tool.tox]
-envlist = ["test"]
-isolated_build = true
-requires = ["tox"]
+envlist = ["test", "lint"]
 
-[tool.tox.envs.test]
+[tool.tox.env.test]
+description = "Run test under {base_python}"
+runner = "uv-venv-runner"
 deps = ["pytest"]
-commands = ["pytest tests/*"]
+commands = [["pytest", "tests/"]]
+
+[tool.tox.env.lint]
+deps = ["ruff"]
+commands = [["ruff", "check", "src"], ["ruff", "format", "--check", "src"]]
+skip_install = true
