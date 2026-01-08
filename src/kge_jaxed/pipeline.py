@@ -141,6 +141,8 @@ class KGEPipeline:
             )
         elif isinstance(dataset, BaseDataset):
             self.dataset = dataset
+        else:
+            raise TypeError("dataset must be a dataset name or a BaseDataset instance")
 
         # Get model and loss from registries
         model_cls = MODELS[model_name]
@@ -183,6 +185,8 @@ class KGEPipeline:
         """
         Train loop. Deterministic RNGs derived from (seed, process, phase=0, global_step).
         """
+        if log_every <= 0:
+            raise ValueError("log_every must be a positive integer")
         train_losses: list[float] = []
         global_step = 0
 
@@ -213,8 +217,11 @@ class KGEPipeline:
                 epoch_losses.append(loss_value)
                 global_step += 1
 
-            avg_loss = float(jnp.mean(jnp.array(epoch_losses)))
-            train_losses.append(avg_loss)
+            if epoch_losses:
+                avg_loss = float(jnp.mean(jnp.array(epoch_losses)))
+                train_losses.append(avg_loss)
+            else:
+                avg_loss = float("nan")
 
             if (epoch + 1) % int(log_every) == 0:
                 print(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.4f}")
