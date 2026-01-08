@@ -57,5 +57,9 @@ class BaseEmbedding(nnx.Module):
 
     def __call__(self, x, *, rngs: nnx.Rngs | None = None):
         x = self.emb(x)
-        x = self.dropout(x) if rngs is None else self.dropout(x, rngs=rngs)
-        return x
+        if self.dropout_rate <= 0:
+            return x
+        if rngs is None:
+            # None rngs => deterministic path (e.g., evaluation).
+            return self.dropout(x, deterministic=True)
+        return self.dropout(x, rngs=rngs)

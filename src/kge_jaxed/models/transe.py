@@ -17,6 +17,36 @@ class TransE(BaseKGE):
         rngs: nnx.Rngs | None = None,
         seed: int | None = None,
     ) -> None:
+        """
+        Initialize a TransE model.
+
+        TransE models relations as translations in embedding space: a valid triple
+        (h, r, t) should satisfy h + r ≈ t. The score used during training is the
+        negative p-norm distance between h + r and t:
+            score(h, r, t) = -||h + r - t||_p
+
+        :param num_entities: Number of entities in the knowledge graph.
+        :type num_entities: int
+        :param num_relations: Number of relations in the knowledge graph.
+        :type num_relations: int
+        :param embedding_dim: Dimensionality of the embeddings.
+        :type embedding_dim: int
+        :param norm: Norm order p for the distance (commonly 1 or 2).
+        :type norm: int
+        :param entity_embedding_kwargs: Extra args for the entity embedding module.
+        :type entity_embedding_kwargs: dict, optional
+        :param relation_embedding_kwargs: Extra args for the relation embedding module.
+        :type relation_embedding_kwargs: dict, optional
+        :param rngs: Flax NNX RNGs for initialization and dropout.
+        :type rngs: nnx.Rngs, optional
+        :param seed: Seed used to create RNGs if none are provided.
+        :type seed: int, optional
+
+        Reference:
+            Bordes, A., Usunier, N., Garcia-Duran, A., Weston, J., and Yakhnenko, O.
+            "Translating Embeddings for Modeling Multi-relational Data."
+            NeurIPS 2013.
+        """
         if entity_embedding_kwargs is None:
             entity_embedding_kwargs = {}
         if relation_embedding_kwargs is None:
@@ -33,6 +63,22 @@ class TransE(BaseKGE):
         self.norm = norm
 
     def interaction_function(self, h: Array, r: Array, t: Array) -> Array:
+        """
+        Compute TransE scores for a batch of triples.
+
+        The TransE score is the negative distance between h + r and t:
+            score(h, r, t) = -||h + r - t||_p
+        where p is the norm specified by ``norm``.
+
+        :param h: Head entity embeddings of shape [B, D].
+        :type h: Array
+        :param r: Relation embeddings of shape [B, D].
+        :type r: Array
+        :param t: Tail entity embeddings of shape [B, D].
+        :type t: Array
+        :return: Scores of shape [B], higher is better.
+        :rtype: Array
+        """
         score = h + r - t
         return -jnp.linalg.norm(score, ord=self.norm, axis=1)
 
