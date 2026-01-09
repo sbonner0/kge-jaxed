@@ -4,6 +4,7 @@ from typing import Any, Literal
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import pandas as pd
 from flax import nnx
@@ -11,7 +12,12 @@ from flax import nnx
 from kge_jaxed.datasets.base import BaseDataset
 from kge_jaxed.datasets.pykeen_datasets import PyKEENDataset
 from kge_jaxed.evaluation.metrics import compute_metrics_dataframe
-from kge_jaxed.evaluation.utils import rank_triple
+from kge_jaxed.evaluation.utils import (
+    compute_rank,
+    compute_ranks_unfiltered,
+    find_filtered_indices,
+    score_all_entities_batch,
+)
 from kge_jaxed.models.base_kge import BaseKGE
 from kge_jaxed.negative_sampling.uniform_negative_sampling import (
     uniform_balanced_sampler,
@@ -236,6 +242,7 @@ class KGEPipeline:
         split: str = "test",
         filtered: bool = True,
         max_triples: int | None = None,
+        eval_batch_size: int | None = 32,
         return_ranks_df: bool = False,
     ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
         """
@@ -244,6 +251,7 @@ class KGEPipeline:
         :param split: Which split to evaluate on ('train', 'valid', 'test')
         :param filtered: Use filtered evaluation (exclude other known true triples)
         :param max_triples: Limit number of triples to evaluate (for speed)
+        :param eval_batch_size: Batch size for evaluation iterator
         :param return_ranks_df: Return the evaluation triples with head/tail ranks
         :return: Metrics DataFrame, and optionally the ranked triples DataFrame
         """
@@ -256,16 +264,16 @@ class KGEPipeline:
         test_df = split_map[split]
         eval_df = test_df if max_triples is None else test_df.iloc[:max_triples]
 
-        test_triples = jnp.array(eval_df.to_numpy(), dtype=jnp.int32)
+        split_key = "val" if split == "valid" else split
 
         # Get all known triples for filtering
         filter_triples = None
         if filtered:
-            all_triples = jnp.concatenate(
+            all_triples = np.concatenate(
                 [
-                    jnp.array(self.dataset.train_df.to_numpy(), dtype=jnp.int32),
-                    jnp.array(self.dataset.val_df.to_numpy(), dtype=jnp.int32),
-                    jnp.array(self.dataset.test_df.to_numpy(), dtype=jnp.int32),
+                    np.asarray(self.dataset.train_df.to_numpy(), dtype=np.int32),
+                    np.asarray(self.dataset.val_df.to_numpy(), dtype=np.int32),
+                    np.asarray(self.dataset.test_df.to_numpy(), dtype=np.int32),
                 ]
             )
             filter_triples = all_triples
@@ -273,28 +281,54 @@ class KGEPipeline:
         # Always evaluate both sides (head and tail)
         sides: tuple[Literal["tail", "head"], ...] = ("tail", "head")
 
-        print(f"Evaluating on {len(test_triples)} triples (corruption: both, filtered: {filtered})...")
+        total_triples = len(eval_df)
+        print(f"Evaluating on {total_triples} triples (corruption: both, filtered: {filtered})...")
 
         head_ranks: list[int] = []
         tail_ranks: list[int] = []
+        eval_triples: list[np.ndarray] = []
 
         # Process each triple and compute ranks
-        for i, triple in enumerate(test_triples):
-            if (i + 1) % 100 == 0:
-                print(f"  Processed {i + 1}/{len(test_triples)} triples...")
+        processed = 0
+        eval_iter = self.dataset.iter_eval_batches(split=split_key, batch_size=eval_batch_size, df=eval_df)
+        for batch in eval_iter:
+            batch_jax = jnp.asarray(batch, dtype=jnp.int32)
+            batch_size = batch.shape[0]
+
+            if return_ranks_df:
+                eval_triples.extend(batch)
 
             for side in sides:
-                rank = rank_triple(
+                scores = score_all_entities_batch(
                     self.model,
-                    triple,
+                    batch_jax,
                     self.dataset.num_entities,
                     corruption_side=side,
-                    filter_triples=filter_triples,
                 )
-                if side == "head":
-                    head_ranks.append(int(rank))
+                if not filtered:
+                    true_indices = batch_jax[:, 2] if side == "tail" else batch_jax[:, 0]
+                    ranks = compute_ranks_unfiltered(scores, true_indices)
+                    ranks_list = [int(r) for r in np.asarray(ranks)]
+                    if side == "head":
+                        head_ranks.extend(ranks_list)
+                    else:
+                        tail_ranks.extend(ranks_list)
                 else:
-                    tail_ranks.append(int(rank))
+                    for i in range(batch_size):
+                        triple = batch[i]
+                        h, r, t = int(triple[0]), int(triple[1]), int(triple[2])
+                        filtered_indices_np = find_filtered_indices(filter_triples, h, r, t, side)
+                        filtered_indices = jnp.asarray(filtered_indices_np, dtype=jnp.int32)
+                        true_idx = batch_jax[i, 2] if side == "tail" else batch_jax[i, 0]
+                        rank = compute_rank(scores[i], true_idx, filtered_indices)
+                        if side == "head":
+                            head_ranks.append(int(rank))
+                        else:
+                            tail_ranks.append(int(rank))
+
+            processed += batch_size
+            if processed % 100 == 0 or processed >= total_triples:
+                print(f"  Processed {processed}/{total_triples} triples...")
 
         # Compute metrics from ranks (per side + average)
         metrics_df = compute_metrics_dataframe(head_ranks, tail_ranks)
@@ -305,7 +339,7 @@ class KGEPipeline:
         if not return_ranks_df:
             return metrics_df
 
-        ranks_df = eval_df.copy()
+        ranks_df = pd.DataFrame(eval_triples, columns=eval_df.columns)
         ranks_df["rank_head"] = head_ranks
         ranks_df["rank_tail"] = tail_ranks
 

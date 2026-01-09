@@ -83,21 +83,36 @@ class BaseDataset(ABC):
         """Populate self.train_df / self.val_df / self.test_df."""
         raise NotImplementedError
 
-    def _make_iter(self, df: pd.DataFrame) -> DatasetIterator:
+    def _make_iter(
+        self,
+        df: pd.DataFrame,
+        *,
+        shuffle: bool | None = None,
+        batch_size: int | None = None,
+    ) -> DatasetIterator:
         """
         Create an iterator that yields batches of triples from the DataFrame.
 
         :param df: Input DataFrame with columns ["head", "relation", "tail"]
         :type df: pd.DataFrame
+        :param shuffle: Whether to shuffle the dataset, defaults to self.shuffle
+        :type shuffle: bool | None, optional
+        :param batch_size: Batch size, defaults to self.batch_size
+        :type batch_size: int | None, optional
         :yield: Batches of triples of shape [B, 3] with dtype int32
         :rtype: Iterator[np.ndarray]
         """
+        if shuffle is None:
+            shuffle = self.shuffle
+        if batch_size is None:
+            batch_size = self.batch_size
+
         source = PandasArraySource(df)  # [N,3]
         ds = grain.MapDataset.source(source)
-        if self.shuffle:
+        if shuffle:
             ds = ds.shuffle(seed=self.seed)  # global shuffle
         ds = ds.map(lambda x: x.astype(np.int32, copy=False))
-        ds = ds.batch(self.batch_size)  # -> yields [B,3] arrays
+        ds = ds.batch(batch_size)  # -> yields [B,3] arrays
 
         iter_dataset = ds.to_iter_dataset(
             grain.ReadOptions(num_threads=self.num_threads, prefetch_buffer_size=self.prefetch_buffer_size)
@@ -115,3 +130,26 @@ class BaseDataset(ABC):
         """
         df = {"train": self.train_df, "val": self.val_df, "test": self.test_df}[split]
         return self._make_iter(df)
+
+    def iter_eval_batches(
+        self,
+        split: Literal["train", "val", "test"] = "test",
+        *,
+        batch_size: int | None = None,
+        df: pd.DataFrame | None = None,
+    ) -> DatasetIterator:
+        """
+        Create an iterator for evaluation (no shuffling).
+
+        :param split: Which split to use, defaults to "test"
+        :type split: Literal[], optional
+        :param batch_size: Batch size, defaults to self.batch_size
+        :type batch_size: int | None, optional
+        :param df: Optional DataFrame override for evaluation
+        :type df: pd.DataFrame | None, optional
+        :return: Iterator over batches of triples
+        :rtype: Iterator[np.ndarray]
+        """
+        if df is None:
+            df = {"train": self.train_df, "val": self.val_df, "test": self.test_df}[split]
+        return self._make_iter(df, shuffle=False, batch_size=batch_size)

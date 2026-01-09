@@ -5,7 +5,7 @@ from typing import Literal
 
 import jax
 import jax.numpy as jnp
-from flax import nnx
+import numpy as np
 
 
 @partial(jax.jit, static_argnames=("num_entities", "corruption_side"))
@@ -47,7 +47,43 @@ def score_all_entities(
     return scores
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("num_entities", "corruption_side"))
+def score_all_entities_batch(
+    model,
+    triples: jnp.ndarray,
+    num_entities: int,
+    corruption_side: Literal["head", "tail"] = "tail",
+) -> jnp.ndarray:
+    """
+    Score a batch of triples against all possible entity replacements.
+
+    :param model: KGE model with score_hrt method
+    :param triples: Batch of triples [B, 3]
+    :param num_entities: Total number of entities
+    :param corruption_side: Which side to corrupt ("head" or "tail")
+    :return: Scores for all entity replacements [B, num_entities]
+    """
+    h = triples[:, 0]
+    r = triples[:, 1]
+    t = triples[:, 2]
+    batch_size = triples.shape[0]
+    all_entities = jnp.arange(num_entities, dtype=triples.dtype)
+
+    if corruption_side == "tail":
+        batch_h = jnp.broadcast_to(h[:, None], (batch_size, num_entities))
+        batch_r = jnp.broadcast_to(r[:, None], (batch_size, num_entities))
+        batch_t = jnp.broadcast_to(all_entities[None, :], (batch_size, num_entities))
+    else:  # head
+        batch_h = jnp.broadcast_to(all_entities[None, :], (batch_size, num_entities))
+        batch_r = jnp.broadcast_to(r[:, None], (batch_size, num_entities))
+        batch_t = jnp.broadcast_to(t[:, None], (batch_size, num_entities))
+
+    corrupted_batch = jnp.stack([batch_h, batch_r, batch_t], axis=2)
+    flat_triples = corrupted_batch.reshape(-1, 3)
+    scores = model.score_hrt(flat_triples)
+    return scores.reshape(batch_size, num_entities)
+
+
 def compute_rank(
     scores: jnp.ndarray,
     true_idx: jnp.ndarray,  # Changed from int to jnp.ndarray
@@ -91,13 +127,27 @@ def compute_rank(
     return jnp.maximum(rank, 1)  # Ensure rank >= 1
 
 
+@jax.jit
+def compute_ranks_unfiltered(scores: jnp.ndarray, true_indices: jnp.ndarray) -> jnp.ndarray:
+    """
+    Compute unfiltered ranks for a batch of score vectors.
+
+    :param scores: Scores [B, num_entities]
+    :param true_indices: True entity indices [B]
+    :return: Ranks [B]
+    """
+    batch_indices = jnp.arange(scores.shape[0])
+    true_scores = scores[batch_indices, true_indices]
+    return jnp.sum(scores > true_scores[:, None], axis=1) + 1
+
+
 def find_filtered_indices(
-    filter_triples: jnp.ndarray,
+    filter_triples: np.ndarray,
     h: int,
     r: int,
     t: int,
     corruption_side: Literal["head", "tail"],
-) -> jnp.ndarray:
+) -> np.ndarray:
     """
     Find indices of other true entities to filter (non-JIT, runs on host).
 
@@ -118,40 +168,12 @@ def find_filtered_indices(
         return filter_triples[mask, 0]
 
 
-@partial(nnx.jit, static_argnames=("num_entities", "corruption_side"))
-def rank_triple_jit(
-    model,
-    triple: jnp.ndarray,
-    num_entities: int,
-    corruption_side: Literal["head", "tail"],
-    filtered_indices: jnp.ndarray,
-) -> jnp.ndarray:
-    """
-    Compute rank for a single triple (JIT-compiled core).
-
-    :param model: KGE model
-    :param triple: Single triple [3]
-    :param num_entities: Total number of entities
-    :param corruption_side: Which side to corrupt
-    :param filtered_indices: Pre-computed filtered entity indices
-    :return: Rank (1-indexed, scalar array)
-    """
-    # Score all entities
-    scores = score_all_entities(model, triple, num_entities, corruption_side)
-
-    # Get true entity index (keep as JAX array, don't convert to int)
-    true_idx = triple[2] if corruption_side == "tail" else triple[0]
-
-    # Compute rank with filtering
-    return compute_rank(scores, true_idx, filtered_indices)
-
-
 def rank_triple(
     model,
-    triple: jnp.ndarray,
+    triple: np.ndarray,
     num_entities: int,
     corruption_side: Literal["head", "tail"],
-    filter_triples: jnp.ndarray | None = None,
+    filter_triples: np.ndarray | None = None,
 ) -> int:
     """
     Compute rank for a single triple (host-side wrapper).
@@ -164,21 +186,16 @@ def rank_triple(
     :return: Rank (1-indexed, Python int)
     """
     # Find filtered indices on host (avoids boolean indexing in JIT)
-    filtered_indices = None
     if filter_triples is not None:
         h, r, t = int(triple[0]), int(triple[1]), int(triple[2])
-        filtered_indices = find_filtered_indices(filter_triples, h, r, t, corruption_side)
-
-        # Convert to JAX array (can be empty)
-        if len(filtered_indices) > 0:
-            filtered_indices = jnp.array(filtered_indices, dtype=jnp.int32)
-        else:
-            filtered_indices = jnp.array([], dtype=jnp.int32)
+        filtered_indices_np = find_filtered_indices(filter_triples, h, r, t, corruption_side)
+        filtered_indices = jnp.asarray(filtered_indices_np, dtype=jnp.int32)
     else:
         filtered_indices = jnp.array([], dtype=jnp.int32)
 
-    # Call JIT-compiled function
-    rank_array = rank_triple_jit(model, triple, num_entities, corruption_side, filtered_indices)
+    triple_jax = jnp.asarray(triple, dtype=jnp.int32)
+    scores = score_all_entities(model, triple_jax, num_entities, corruption_side)
+    true_idx = triple_jax[2] if corruption_side == "tail" else triple_jax[0]
+    rank_array = compute_rank(scores, true_idx, filtered_indices)
 
-    # Convert to Python int only at the very end
     return int(rank_array)
