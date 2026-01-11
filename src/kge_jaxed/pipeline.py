@@ -1,17 +1,23 @@
 from collections.abc import Callable
 from functools import partial
-from typing import Any, Literal
+from typing import Any
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 import pandas as pd
 from flax import nnx
 
 from kge_jaxed.datasets.base import BaseDataset
 from kge_jaxed.datasets.pykeen_datasets import PyKEENDataset
+from kge_jaxed.evaluation.grouped import (
+    build_filter_map,
+    build_group_maps,
+    score_grouped_pairs,
+)
+from kge_jaxed.evaluation.validation import validate_eval_df
 from kge_jaxed.evaluation.metrics import compute_metrics_dataframe
-from kge_jaxed.evaluation.utils import rank_triple
 from kge_jaxed.models.base_kge import BaseKGE
 from kge_jaxed.negative_sampling.uniform_negative_sampling import (
     uniform_balanced_sampler,
@@ -233,68 +239,109 @@ class KGEPipeline:
 
     def evaluate(
         self,
-        split: str = "test",
+        split: str | None = "test",
+        eval_df: pd.DataFrame | None = None,
         filtered: bool = True,
-        max_triples: int | None = None,
+        eval_batch_size: int | None = None,
         return_ranks_df: bool = False,
     ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
         """
         Evaluate model using ranking metrics (MRR, MR, Hits@K).
 
-        :param split: Which split to evaluate on ('train', 'valid', 'test')
+        This evaluation groups triples by shared (head, relation) and (relation, tail)
+        pairs so each unique pair is scored once against all entities. The resulting
+        score vectors are reused to compute ranks for all true tails/heads in that
+        group, reducing redundant scoring. When filtered=True, known positives are
+        removed from the ranking via precomputed filter maps.
+
+        :param split: Which split to evaluate on ('train', 'valid', 'test'); set to None when eval_df is provided
+        :type split: str | None
+        :param eval_df: Optional evaluation DataFrame override (mutually exclusive with split)
+        :type eval_df: pd.DataFrame | None
         :param filtered: Use filtered evaluation (exclude other known true triples)
-        :param max_triples: Limit number of triples to evaluate (for speed)
-        :param return_ranks_df: Return the evaluation triples with head/tail ranks
+        :type filtered: bool
+        :param eval_batch_size: Batch size for grouped evaluation
+        :type eval_batch_size: int | None
+        :param return_ranks_df: Return the evaluation triples with head/tail ranks and scores
+        :type return_ranks_df: bool
         :return: Metrics DataFrame, and optionally the ranked triples DataFrame
+        :rtype: pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]
         """
         # Get test triples
-        split_map = {
-            "train": self.dataset.train_df,
-            "valid": self.dataset.val_df,
-            "test": self.dataset.test_df,
-        }
-        test_df = split_map[split]
-        eval_df = test_df if max_triples is None else test_df.iloc[:max_triples]
+        if eval_df is None:
+            if split is None:
+                raise ValueError("split must be provided when eval_df is not set")
+            split_map = {
+                "train": self.dataset.train_df,
+                "valid": self.dataset.val_df,
+                "test": self.dataset.test_df,
+            }
+            eval_df = split_map[split]
+        else:
+            if split is not None:
+                raise ValueError("Provide only split or eval_df, not both")
+            validate_eval_df(eval_df, self.dataset.num_entities, self.dataset.num_relations)
+        eval_df = eval_df.reset_index(drop=True)
 
-        test_triples = jnp.array(eval_df.to_numpy(), dtype=jnp.int32)
+        total_triples = len(eval_df)
+        if total_triples == 0:
+            raise ValueError("No triples found for evaluation.")
 
-        # Get all known triples for filtering
-        filter_triples = None
+        if eval_batch_size is None:
+            eval_batch_size = self.dataset.batch_size
+
+        print(f"Evaluating on {total_triples} triples (grouped, filtered: {filtered})...")
+
+        tail_ranks = np.empty(total_triples, dtype=np.int32)
+        head_ranks = np.empty(total_triples, dtype=np.int32)
+
+        # Build eval groups (unique keys -> row indices + true entities)
+        tail_group_indices, tail_group_tails, tail_pairs = build_group_maps(eval_df, ["head", "relation"], "tail")
+        head_group_indices, head_group_heads, head_pairs = build_group_maps(eval_df, ["relation", "tail"], "head")
+
+        # Build filter maps from all triples (for filtered evaluation)
+        tail_filter_map: dict[tuple[int, int], np.ndarray] = {}
+        head_filter_map: dict[tuple[int, int], np.ndarray] = {}
         if filtered:
-            all_triples = jnp.concatenate(
-                [
-                    jnp.array(self.dataset.train_df.to_numpy(), dtype=jnp.int32),
-                    jnp.array(self.dataset.val_df.to_numpy(), dtype=jnp.int32),
-                    jnp.array(self.dataset.test_df.to_numpy(), dtype=jnp.int32),
-                ]
+            filter_triples = pd.concat(
+                [self.dataset.train_df, self.dataset.val_df, self.dataset.test_df],
+                ignore_index=True,
             )
-            filter_triples = all_triples
+            tail_filter_map = build_filter_map(filter_triples, ["head", "relation"], "tail")
+            head_filter_map = build_filter_map(filter_triples, ["relation", "tail"], "head")
 
-        # Always evaluate both sides (head and tail)
-        sides: tuple[Literal["tail", "head"], ...] = ("tail", "head")
+        tail_scores = None
+        head_scores = None
+        if return_ranks_df:
+            tail_scores = np.empty(total_triples, dtype=np.float32)
+            head_scores = np.empty(total_triples, dtype=np.float32)
 
-        print(f"Evaluating on {len(test_triples)} triples (corruption: both, filtered: {filtered})...")
-
-        head_ranks: list[int] = []
-        tail_ranks: list[int] = []
-
-        # Process each triple and compute ranks
-        for i, triple in enumerate(test_triples):
-            if (i + 1) % 100 == 0:
-                print(f"  Processed {i + 1}/{len(test_triples)} triples...")
-
-            for side in sides:
-                rank = rank_triple(
-                    self.model,
-                    triple,
-                    self.dataset.num_entities,
-                    corruption_side=side,
-                    filter_triples=filter_triples,
-                )
-                if side == "head":
-                    head_ranks.append(int(rank))
-                else:
-                    tail_ranks.append(int(rank))
+        tail_ranks = score_grouped_pairs(
+            self.model,
+            tail_pairs,
+            tail_group_indices,
+            tail_group_tails,
+            tail_filter_map,
+            "tail",
+            self.dataset.num_entities,
+            eval_batch_size,
+            total_triples,
+            "tail",
+            scores_out=tail_scores,
+        )
+        head_ranks = score_grouped_pairs(
+            self.model,
+            head_pairs,
+            head_group_indices,
+            head_group_heads,
+            head_filter_map,
+            "head",
+            self.dataset.num_entities,
+            eval_batch_size,
+            total_triples,
+            "head",
+            scores_out=head_scores,
+        )
 
         # Compute metrics from ranks (per side + average)
         metrics_df = compute_metrics_dataframe(head_ranks, tail_ranks)
@@ -308,5 +355,8 @@ class KGEPipeline:
         ranks_df = eval_df.copy()
         ranks_df["rank_head"] = head_ranks
         ranks_df["rank_tail"] = tail_ranks
+        if head_scores is not None and tail_scores is not None:
+            ranks_df["score_head"] = head_scores
+            ranks_df["score_tail"] = tail_scores
 
         return metrics_df, ranks_df
