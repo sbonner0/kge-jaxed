@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 import jax
@@ -16,14 +17,15 @@ from kge_jaxed.evaluation.grouped import (
     build_group_maps,
     score_grouped_pairs,
 )
-from kge_jaxed.evaluation.validation import validate_eval_df
 from kge_jaxed.evaluation.metrics import compute_metrics_dataframe
+from kge_jaxed.evaluation.validation import validate_eval_df
 from kge_jaxed.models.base_kge import BaseKGE
 from kge_jaxed.negative_sampling.uniform_negative_sampling import (
     uniform_balanced_sampler,
 )
 from kge_jaxed.registries import LOSSES, MODELS
 from kge_jaxed.rngs import RngManager, make_model_rngs
+from kge_jaxed.training import checkpointing as ckpt
 
 # ----------------------------- #
 # JIT-friendly step function   #
@@ -131,6 +133,9 @@ class KGEPipeline:
     ) -> None:
         """Initialize the KGE training pipeline."""
 
+        self.model_name = model_name
+        self.embedding_dim = int(embedding_dim)
+        self.model_kwargs = dict(model_kwargs)
         self.negative_samples = int(negative_samples)
         self.learning_rate = float(learning_rate)
         self.seed = int(seed)
@@ -145,8 +150,10 @@ class KGEPipeline:
                 batch_size=train_batch_size,
                 seed=self.dataset_seed,
             )
+            self.dataset_name = dataset
         elif isinstance(dataset, BaseDataset):
             self.dataset = dataset
+            self.dataset_name = getattr(dataset, "dataset_name", None)
         else:
             raise TypeError("dataset must be a dataset name or a BaseDataset instance")
 
@@ -185,22 +192,119 @@ class KGEPipeline:
         """
         return self.rng_manager.step_key(step, phase=phase)
 
+    # -------- Checkpointing -------- #
+
+    def _checkpoint_metadata(self) -> dict[str, Any]:
+        return {
+            "model_name": self.model_name,
+            "embedding_dim": self.embedding_dim,
+            "model_kwargs": self.model_kwargs,
+            "dataset_name": self.dataset_name,
+            "num_entities": self.dataset.num_entities,
+            "num_relations": self.dataset.num_relations,
+            "learning_rate": self.learning_rate,
+        }
+
+    def save_checkpoint(
+        self,
+        checkpoint_path: str,
+        *,
+        epoch: int | None = None,
+        global_step: int | None = None,
+    ) -> None:
+        """
+        Save model parameters and optimizer state to an Orbax checkpoint directory.
+
+        :param checkpoint_path: Target checkpoint directory.
+        :type checkpoint_path: str
+        :param epoch: Optional current epoch to store in metadata.
+        :type epoch: int | None
+        :param global_step: Optional global step to store in metadata.
+        :type global_step: int | None
+        """
+        metadata = self._checkpoint_metadata()
+        if epoch is not None:
+            metadata["epoch"] = int(epoch)
+        if global_step is not None:
+            metadata["global_step"] = int(global_step)
+        ckpt.save_checkpoint(
+            checkpoint_path,
+            model=self.model,
+            optimizer=self.optimizer,
+            metadata=metadata,
+        )
+
+    def load_checkpoint(self, checkpoint_path: str) -> dict[str, Any] | None:
+        """
+        Restore model parameters and optimizer state from an Orbax checkpoint directory.
+
+        :param checkpoint_path: Source checkpoint directory.
+        :type checkpoint_path: str
+        :return: Stored metadata dict when present; otherwise None.
+        :rtype: dict[str, Any] | None
+        """
+
+        def rebuild_optimizer(model: BaseKGE) -> nnx.Optimizer:
+            return nnx.Optimizer(model, optax.adam(self.learning_rate), wrt=nnx.Param)
+
+        self.model, self.optimizer, metadata = ckpt.load_checkpoint(
+            checkpoint_path,
+            model=self.model,
+            optimizer=self.optimizer,
+            rebuild_optimizer=rebuild_optimizer,
+            expected_metadata=self._checkpoint_metadata(),
+            warn_metadata_keys={"learning_rate"},
+        )
+        return metadata
+
     # -------- Training / eval loops -------- #
 
-    def train(self, epochs: int = 100, log_every: int = 10) -> dict[str, Any]:
+    def train(
+        self,
+        epochs: int = 100,
+        log_every: int = 10,
+        *,
+        save_checkpoint_dir: str | None = None,
+        save_every: int | None = None,
+    ) -> dict[str, Any]:
         """
-        Train loop. Deterministic RNGs derived from (seed, process, phase=0, global_step).
+        Run the training loop for a fixed number of epochs.
+
+        This loop uses deterministic RNGs derived from (seed, process, phase=0, global_step).
+        It optionally saves checkpoints during training and always saves a final checkpoint
+        when ``save_checkpoint_dir`` is provided. Saved checkpoints include the current
+        epoch and global step in metadata.
+
+        :param epochs: Number of epochs to train for.
+        :type epochs: int
+        :param log_every: Print loss every N epochs.
+        :type log_every: int
+        :param save_checkpoint_dir: Directory to save checkpoints. If set, the checkpoint is overwritten in this directory.
+        :type save_checkpoint_dir: str | None
+        :param save_every: Save every N epochs. Requires ``save_checkpoint_dir`` to be set.
+            When provided, the same directory is overwritten each time.
+        :type save_every: int | None
+        :return: Training summary including per-epoch loss and the RNG seed.
+        :rtype: dict[str, Any]
         """
         if log_every <= 0:
             raise ValueError("log_every must be a positive integer")
+        if save_every is not None and save_every <= 0:
+            raise ValueError("save_every must be a positive integer")
+        if save_every is not None and save_checkpoint_dir is None:
+            raise ValueError("save_checkpoint_dir must be set when save_every is provided")
+
+        checkpoint_path = Path(save_checkpoint_dir) if save_checkpoint_dir is not None else None
         train_losses: list[float] = []
         global_step = 0
 
         print(f"Starting training for {epochs} epochs...")
 
+        # Training loop over epochs
         for epoch in range(int(epochs)):
             epoch_losses = []
 
+            # Loop over training batches
             for batch in self.dataset.iter_batches("train"):
                 batch = jnp.array(batch)
 
@@ -231,6 +335,11 @@ class KGEPipeline:
 
             if (epoch + 1) % int(log_every) == 0:
                 print(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.4f}")
+            if checkpoint_path is not None and save_every is not None and (epoch + 1) % int(save_every) == 0:
+                self.save_checkpoint(str(checkpoint_path), epoch=epoch + 1, global_step=global_step)
+
+        if checkpoint_path is not None:
+            self.save_checkpoint(str(checkpoint_path), epoch=epochs, global_step=global_step)
 
         return {
             "train_losses": train_losses,

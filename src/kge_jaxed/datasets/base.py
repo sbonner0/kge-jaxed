@@ -75,6 +75,7 @@ class BaseDataset(ABC):
         self.val_df = pd.DataFrame()
         self.test_df = pd.DataFrame()
 
+        self.dataset_name: str | None = None
         self.num_entities = 0
         self.num_relations = 0
 
