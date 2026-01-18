@@ -67,7 +67,6 @@ def train_step_fn(
     A JIT-optimised function to take a training step for KGE model. This function
     generates negative samples, computes the loss, and updates model parameters.
 
-
     :param model: KGE model
     :type model: nnx.Module
     :param optimizer: Optimizer bound to model parameters
@@ -141,6 +140,10 @@ class KGEPipeline:
         self.seed = int(seed)
         self.model_seed = None if model_seed is None else int(model_seed)
         self.dataset_seed = int(self.seed if dataset_seed is None else dataset_seed)
+
+        # Training state (checkpoint-resumable)
+        self.epoch = 0
+        self.global_step = 0
 
         # Sort out dataset input
         self.dataset: BaseDataset
@@ -255,6 +258,9 @@ class KGEPipeline:
             expected_metadata=self._checkpoint_metadata(),
             warn_metadata_keys={"learning_rate"},
         )
+        if metadata is not None:
+            self.epoch = int(metadata.get("epoch", 0))
+            self.global_step = int(metadata.get("global_step", 0))
         return metadata
 
     # -------- Training / eval loops -------- #
@@ -273,7 +279,8 @@ class KGEPipeline:
         This loop uses deterministic RNGs derived from (seed, process, phase=0, global_step).
         It optionally saves checkpoints during training and always saves a final checkpoint
         when ``save_checkpoint_dir`` is provided. Saved checkpoints include the current
-        epoch and global step in metadata.
+        epoch and global step in metadata. If a checkpoint was loaded, training resumes
+        from the stored epoch and global step.
 
         :param epochs: Number of epochs to train for.
         :type epochs: int
@@ -296,12 +303,13 @@ class KGEPipeline:
 
         checkpoint_path = Path(save_checkpoint_dir) if save_checkpoint_dir is not None else None
         train_losses: list[float] = []
-        global_step = 0
+        start_epoch = int(self.epoch)
+        global_step = int(self.global_step)
 
-        print(f"Starting training for {epochs} epochs...")
+        print(f"Starting training for {epochs} epochs (resume from epoch {start_epoch})...")
 
         # Training loop over epochs
-        for epoch in range(int(epochs)):
+        for epoch in range(start_epoch, start_epoch + int(epochs)):
             epoch_losses = []
 
             # Loop over training batches
@@ -334,12 +342,15 @@ class KGEPipeline:
                 avg_loss = float("nan")
 
             if (epoch + 1) % int(log_every) == 0:
-                print(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.4f}")
+                print(f"Epoch {epoch + 1}/{start_epoch + epochs}, Loss: {avg_loss:.4f}")
             if checkpoint_path is not None and save_every is not None and (epoch + 1) % int(save_every) == 0:
                 self.save_checkpoint(str(checkpoint_path), epoch=epoch + 1, global_step=global_step)
 
+            self.epoch = epoch + 1
+            self.global_step = global_step
+
         if checkpoint_path is not None:
-            self.save_checkpoint(str(checkpoint_path), epoch=epochs, global_step=global_step)
+            self.save_checkpoint(str(checkpoint_path), epoch=self.epoch, global_step=self.global_step)
 
         return {
             "train_losses": train_losses,
