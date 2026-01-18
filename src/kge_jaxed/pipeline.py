@@ -6,7 +6,6 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import numpy as np
-import optax
 import pandas as pd
 from flax import nnx
 
@@ -23,7 +22,7 @@ from kge_jaxed.models.base_kge import BaseKGE
 from kge_jaxed.negative_sampling.uniform_negative_sampling import (
     uniform_balanced_sampler,
 )
-from kge_jaxed.registries import LOSSES, MODELS
+from kge_jaxed.registries import get_loss, get_model, get_optimizer
 from kge_jaxed.rngs import RngManager, make_model_rngs
 from kge_jaxed.training import checkpointing as ckpt
 
@@ -124,6 +123,8 @@ class KGEPipeline:
         embedding_dim: int = 100,
         negative_samples: int = 1,
         learning_rate: float = 1e-3,
+        optimizer_name: str = "adam",
+        optimizer_kwargs: dict[str, Any] | None = None,
         use_dropout: bool | None = None,
         seed: int = 42,
         model_seed: int | None = None,
@@ -137,6 +138,8 @@ class KGEPipeline:
         self.model_kwargs = dict(model_kwargs)
         self.negative_samples = int(negative_samples)
         self.learning_rate = float(learning_rate)
+        self.optimizer_name = str(optimizer_name)
+        self.optimizer_kwargs = {} if optimizer_kwargs is None else dict(optimizer_kwargs)
         self.seed = int(seed)
         self.model_seed = None if model_seed is None else int(model_seed)
         self.dataset_seed = int(self.seed if dataset_seed is None else dataset_seed)
@@ -161,8 +164,8 @@ class KGEPipeline:
             raise TypeError("dataset must be a dataset name or a BaseDataset instance")
 
         # Get model and loss from registries
-        model_cls = MODELS[model_name]
-        self.loss_fn = LOSSES[loss_name]
+        model_cls = get_model(model_name)
+        self.loss_fn = get_loss(loss_name)
 
         # Keys: base -> split for init vs training
         # Dedicated RNGs (separate model init from training steps)
@@ -184,7 +187,12 @@ class KGEPipeline:
             self.use_dropout = bool(use_dropout)
 
         # Optimizer bound to NNX params
-        self.optimizer = nnx.Optimizer(self.model, optax.adam(self.learning_rate), wrt=nnx.Param)
+        self.optimizer = self._build_optimizer(self.model)
+
+    def _build_optimizer(self, model: BaseKGE) -> nnx.Optimizer:
+        optimizer_factory = get_optimizer(self.optimizer_name)
+        optimizer_transform = optimizer_factory(self.learning_rate, **self.optimizer_kwargs)
+        return nnx.Optimizer(model, optimizer_transform, wrt=nnx.Param)
 
     # -------- RNG helpers -------- #
 
@@ -206,6 +214,8 @@ class KGEPipeline:
             "num_entities": self.dataset.num_entities,
             "num_relations": self.dataset.num_relations,
             "learning_rate": self.learning_rate,
+            "optimizer_name": self.optimizer_name,
+            "optimizer_kwargs": self.optimizer_kwargs,
         }
 
     def save_checkpoint(
@@ -248,7 +258,7 @@ class KGEPipeline:
         """
 
         def rebuild_optimizer(model: BaseKGE) -> nnx.Optimizer:
-            return nnx.Optimizer(model, optax.adam(self.learning_rate), wrt=nnx.Param)
+            return self._build_optimizer(model)
 
         self.model, self.optimizer, metadata = ckpt.load_checkpoint(
             checkpoint_path,
@@ -256,7 +266,7 @@ class KGEPipeline:
             optimizer=self.optimizer,
             rebuild_optimizer=rebuild_optimizer,
             expected_metadata=self._checkpoint_metadata(),
-            warn_metadata_keys={"learning_rate"},
+            warn_metadata_keys={"learning_rate", "optimizer_name", "optimizer_kwargs"},
         )
         if metadata is not None:
             self.epoch = int(metadata.get("epoch", 0))
