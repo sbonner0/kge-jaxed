@@ -1,6 +1,6 @@
 """Grouped evaluation utilities for KGE ranking."""
 
-from typing import Any, Literal
+from typing import Literal
 
 import jax.numpy as jnp
 import numpy as np
