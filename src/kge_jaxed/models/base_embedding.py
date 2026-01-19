@@ -1,13 +1,18 @@
+from collections.abc import Callable
+from typing import Any
+
 import jax.numpy as jnp
 from flax import nnx
 from flax.typing import Dtype
 
+from kge_jaxed.models.initializers import resolve_embedding_init
 from kge_jaxed.rngs import make_model_rngs
 
 
 class BaseEmbedding(nnx.Module):
     """
-    Base class for embeddings. Allows for easy extension of embeddings with dropout.
+    Base class for embeddings. Allows for easy extension of embeddings with dropout and custom
+    initializers.
     """
 
     def __init__(
@@ -15,6 +20,8 @@ class BaseEmbedding(nnx.Module):
         num_embeddings: int,
         embedding_dim: int,
         dropout_rate: float = 0.0,
+        embedding_init: str | Callable | None = None,
+        embedding_init_kwargs: dict | None = None,
         param_dtype: Dtype = jnp.float32,
         rngs: nnx.Rngs | None = None,
         seed: int | None = None,
@@ -29,6 +36,10 @@ class BaseEmbedding(nnx.Module):
         :type embedding_dim: int
         :param dropout_rate: Dropout rate, defaults to 0.0
         :type dropout_rate: float, optional
+        :param embedding_init: Initializer name or callable for embedding weights
+        :type embedding_init: str | Callable | None, optional
+        :param embedding_init_kwargs: Optional kwargs for string-based initializers
+        :type embedding_init_kwargs: dict | None, optional
         :param param_dtype: Data type for the parameters, defaults to jnp.float32
         :type param_dtype: Dtype, optional
         :param rngs: RNGs for the module, required unless a seed is provided
@@ -46,10 +57,17 @@ class BaseEmbedding(nnx.Module):
                 raise ValueError("BaseEmbedding requires rngs or seed to be provided.")
             rngs = make_model_rngs(seed)
 
+        embedding_init_fn = resolve_embedding_init(embedding_init, embedding_init_kwargs)
+
+        embed_kwargs: dict[str, Any] = {}
+        if embedding_init_fn is not None:
+            embed_kwargs["embedding_init"] = embedding_init_fn
+
         self.emb = nnx.Embed(
             num_embeddings=self.num_embeddings,
             features=self.embedding_dim,
             param_dtype=param_dtype,
+            **embed_kwargs,
             rngs=rngs,
             **kwargs,
         )

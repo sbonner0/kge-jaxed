@@ -296,7 +296,8 @@ class KGEPipeline:
         :type epochs: int
         :param log_every: Print loss every N epochs.
         :type log_every: int
-        :param save_checkpoint_dir: Directory to save checkpoints. If set, the checkpoint is overwritten in this directory.
+        :param save_checkpoint_dir: Directory to save checkpoints. If set, the checkpoint is overwritten
+            in this directory.
         :type save_checkpoint_dir: str | None
         :param save_every: Save every N epochs. Requires ``save_checkpoint_dir`` to be set.
             When provided, the same directory is overwritten each time.
