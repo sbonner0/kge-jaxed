@@ -81,3 +81,6 @@ class BaseEmbedding(nnx.Module):
             # None rngs => deterministic path (e.g., evaluation).
             return self.dropout(x, deterministic=True)
         return self.dropout(x, rngs=rngs)
+
+    def weights(self) -> jnp.ndarray:
+        return jnp.asarray(self.emb.embedding[...])

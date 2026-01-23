@@ -51,7 +51,15 @@ def _score_pos_neg(
     return pos_scores, neg_scores
 
 
-@partial(nnx.jit, static_argnames=("num_negative_samples", "num_entities", "loss_fn", "use_dropout"))
+@partial(
+    nnx.jit,
+    static_argnames=(
+        "num_negative_samples",
+        "num_entities",
+        "loss_fn",
+        "use_dropout",
+    ),
+)
 def train_step_fn(
     model: BaseKGE,
     optimizer: nnx.Optimizer,
@@ -93,14 +101,22 @@ def train_step_fn(
         else:
             neg_key = step_key
             dropout_rngs = None
+
+        # Generate negative samples
         neg = uniform_balanced_sampler(
             triples=batch,
             num_entities=num_entities,
             k=num_negative_samples,
             key=neg_key,
         )
+        # Compute scores and loss
         pos_scores, neg_scores = _score_pos_neg(m, batch, neg, dropout_rngs=dropout_rngs)
-        return loss_fn(pos_scores, neg_scores)
+        loss = loss_fn(pos_scores, neg_scores)
+
+        # Add regularization loss if applicable
+        loss = loss + m.regularization_loss()
+
+        return loss
 
     loss, grads = nnx.value_and_grad(loss_on_model)(model)
     optimizer.update(model, grads)
@@ -119,6 +135,7 @@ class KGEPipeline:
         model_name: str,
         loss_name: str,
         dataset: BaseDataset | str,
+        model_kwargs: dict[str, Any] | None = None,
         train_batch_size: int = 32,
         embedding_dim: int = 100,
         negative_samples: int = 1,
@@ -129,13 +146,12 @@ class KGEPipeline:
         seed: int = 42,
         model_seed: int | None = None,
         dataset_seed: int | None = None,
-        **model_kwargs: Any,
     ) -> None:
         """Initialize the KGE training pipeline."""
 
         self.model_name = model_name
         self.embedding_dim = int(embedding_dim)
-        self.model_kwargs = dict(model_kwargs)
+        self.model_kwargs = {} if model_kwargs is None else dict(model_kwargs)
         self.negative_samples = int(negative_samples)
         self.learning_rate = float(learning_rate)
         self.optimizer_name = str(optimizer_name)
@@ -178,7 +194,7 @@ class KGEPipeline:
             num_relations=self.dataset.num_relations,
             embedding_dim=embedding_dim,
             rngs=init_rngs,
-            **model_kwargs,
+            **self.model_kwargs,
         )
 
         if use_dropout is None:

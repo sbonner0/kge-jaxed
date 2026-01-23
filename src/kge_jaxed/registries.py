@@ -1,4 +1,4 @@
-"""Central registry for all models, losses, samplers, and optimizers."""
+"""Central registry for all models, losses, regularizers, samplers, and optimizers."""
 
 import optax
 
@@ -8,6 +8,7 @@ from kge_jaxed.models.transe import TransE
 
 # Import samplers
 from kge_jaxed.negative_sampling.uniform_negative_sampling import uniform_balanced_sampler
+from kge_jaxed.regularization import registry as regularizer_registry
 
 # ============================================
 # Model Registry
@@ -25,7 +26,6 @@ LOSSES = {
     "mrl": margin_ranking_loss,
     "bce": bce_loss,
 }
-
 
 # ============================================
 # Sampler Registry
@@ -87,6 +87,16 @@ def list_models():
 def list_losses():
     """Return list of available loss names."""
     return list(LOSSES.keys())
+
+
+def list_regularizers():
+    """Return list of available regularizer names."""
+    return regularizer_registry.list_regularizers()
+
+
+# Re-export regularizer registry helpers for backwards compatibility.
+REGULARIZERS = regularizer_registry.REGULARIZERS
+get_regularizer = regularizer_registry.get_regularizer
 
 
 def list_samplers():
