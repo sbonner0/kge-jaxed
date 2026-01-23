@@ -13,6 +13,10 @@ class DistMult(BaseKGE):
         embedding_dim: int,
         entity_embedding_kwargs: dict | None = None,
         relation_embedding_kwargs: dict | None = None,
+        entity_regularizer_name: str | None = None,
+        relation_regularizer_name: str | None = None,
+        entity_regularizer_kwargs: dict | None = None,
+        relation_regularizer_kwargs: dict | None = None,
         rngs: nnx.Rngs | None = None,
         seed: int | None = None,
     ) -> None:
@@ -32,6 +36,14 @@ class DistMult(BaseKGE):
         :type entity_embedding_kwargs: dict, optional
         :param relation_embedding_kwargs: Extra args for the relation embedding module.
         :type relation_embedding_kwargs: dict, optional
+        :param entity_regularizer_name: Regularizer name for entity embeddings.
+        :type entity_regularizer_name: str | None, optional
+        :param relation_regularizer_name: Regularizer name for relation embeddings.
+        :type relation_regularizer_name: str | None, optional
+        :param entity_regularizer_kwargs: Regularizer kwargs for entities (may include weight).
+        :type entity_regularizer_kwargs: dict | None, optional
+        :param relation_regularizer_kwargs: Regularizer kwargs for relations (may include weight).
+        :type relation_regularizer_kwargs: dict | None, optional
         :param rngs: Flax NNX RNGs for initialization and dropout.
         :type rngs: nnx.Rngs, optional
         :param seed: Seed used to create RNGs if none are provided.
@@ -52,6 +64,10 @@ class DistMult(BaseKGE):
             embedding_dim,
             entity_embedding_kwargs=entity_embedding_kwargs,
             relation_embedding_kwargs=relation_embedding_kwargs,
+            entity_regularizer_name=entity_regularizer_name,
+            relation_regularizer_name=relation_regularizer_name,
+            entity_regularizer_kwargs=entity_regularizer_kwargs,
+            relation_regularizer_kwargs=relation_regularizer_kwargs,
             rngs=rngs,
             seed=seed,
         )
