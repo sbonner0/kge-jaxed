@@ -1,6 +1,6 @@
 from collections.abc import Callable
 
-from jax.nn import initializers as jax_initializers
+from flax.nnx import initializers as nnx_initializers
 
 
 def resolve_embedding_init(
@@ -30,19 +30,19 @@ def resolve_embedding_init(
     if name in {"default"}:
         return None
     if name in {"uniform"}:
-        return jax_initializers.uniform(**kwargs)
+        return nnx_initializers.uniform(**kwargs)
     if name in {"normal"}:
-        return jax_initializers.normal(**kwargs)
+        return nnx_initializers.normal(**kwargs)
     if name in {"xavier", "glorot", "xavier_uniform", "glorot_uniform"}:
         return _maybe_variance_scaling(kwargs, distribution="uniform")
     if name in {"xavier_normal", "glorot_normal"}:
         return _maybe_variance_scaling(kwargs, distribution="truncated_normal")
     if name in {"zeros"}:
-        return jax_initializers.zeros
+        return nnx_initializers.zeros
     if name in {"ones"}:
-        return jax_initializers.ones
+        return nnx_initializers.ones
     if name in {"orthogonal"}:
-        return jax_initializers.orthogonal(**kwargs)
+        return nnx_initializers.orthogonal(**kwargs)
 
     available = [
         "default",
@@ -63,14 +63,14 @@ def resolve_embedding_init(
 def _maybe_variance_scaling(kwargs: dict, *, distribution: str) -> Callable:
     local_kwargs = dict(kwargs)
     if {"scale", "mode", "distribution"} & local_kwargs.keys():
-        return jax_initializers.variance_scaling(
+        return nnx_initializers.variance_scaling(
             scale=local_kwargs.pop("scale", 1.0),
             mode=local_kwargs.pop("mode", "fan_avg"),
             distribution=local_kwargs.pop("distribution", distribution),
             **local_kwargs,
         )
     return (
-        jax_initializers.glorot_uniform(**local_kwargs)
+        nnx_initializers.glorot_uniform(**local_kwargs)
         if distribution == "uniform"
-        else jax_initializers.glorot_normal(**local_kwargs)
+        else nnx_initializers.glorot_normal(**local_kwargs)
     )
