@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 from flax import nnx
-from jax.nn import initializers as jinit
+from flax.nnx import initializers as nnx_initializers
 
 from kge_jaxed.models.base_embedding import BaseEmbedding
 
@@ -51,7 +51,7 @@ def test_embedding_init_callable_respected():
         num_embeddings=10,
         embedding_dim=4,
         seed=0,
-        embedding_init=jinit.normal(stddev=0.02),
+        embedding_init=nnx_initializers.normal(stddev=0.02),
     )
     weights_uniform = _get_embedding_weights(emb_uniform)
     weights_callable = _get_embedding_weights(emb_callable)
