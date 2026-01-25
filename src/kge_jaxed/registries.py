@@ -2,7 +2,8 @@
 
 import optax
 
-from kge_jaxed.loss_functions.losses import bce_loss, margin_ranking_loss
+from kge_jaxed.loss_functions.losses import bce_loss, margin_ranking_loss, softplus_loss
+from kge_jaxed.models.complex import ComplEx
 from kge_jaxed.models.distmult import DistMult
 from kge_jaxed.models.transe import TransE
 
@@ -16,6 +17,7 @@ from kge_jaxed.regularization import registry as regularizer_registry
 MODELS = {
     "transe": TransE,
     "distmult": DistMult,
+    "complex": ComplEx,
 }
 
 
@@ -25,6 +27,7 @@ MODELS = {
 LOSSES = {
     "mrl": margin_ranking_loss,
     "bce": bce_loss,
+    "softplus": softplus_loss,
 }
 
 # ============================================
