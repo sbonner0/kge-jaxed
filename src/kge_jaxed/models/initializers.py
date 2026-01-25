@@ -1,6 +1,20 @@
 from collections.abc import Callable
 
+import jax
+import jax.numpy as jnp
 from flax.nnx import initializers as nnx_initializers
+
+
+def _complex_from_real_init(real_init: Callable) -> Callable:
+    def init(key, shape, dtype=jnp.complex64):
+        dtype = jnp.dtype(dtype)
+        real_dtype = jnp.float64 if dtype == jnp.complex128 else jnp.float32
+        key_r, key_i = jax.random.split(key)
+        real = real_init(key_r, shape, dtype=real_dtype)
+        imag = real_init(key_i, shape, dtype=real_dtype)
+        return real.astype(dtype) + 1j * imag.astype(dtype)
+
+    return init
 
 
 def resolve_embedding_init(
@@ -33,6 +47,8 @@ def resolve_embedding_init(
         return nnx_initializers.uniform(**kwargs)
     if name in {"normal"}:
         return nnx_initializers.normal(**kwargs)
+    if name in {"complex_normal"}:
+        return _complex_from_real_init(nnx_initializers.normal(**kwargs))
     if name in {"xavier", "glorot", "xavier_uniform", "glorot_uniform"}:
         return _maybe_variance_scaling(kwargs, distribution="uniform")
     if name in {"xavier_normal", "glorot_normal"}:
@@ -43,11 +59,14 @@ def resolve_embedding_init(
         return nnx_initializers.ones
     if name in {"orthogonal"}:
         return nnx_initializers.orthogonal(**kwargs)
+    if name in {"complex_uniform"}:
+        return _complex_from_real_init(nnx_initializers.uniform(**kwargs))
 
     available = [
         "default",
         "uniform",
         "normal",
+        "complex_normal",
         "xavier",
         "xavier_uniform",
         "xavier_normal",
@@ -56,6 +75,7 @@ def resolve_embedding_init(
         "zeros",
         "ones",
         "orthogonal",
+        "complex_uniform",
     ]
     raise ValueError(f"Unknown embedding_init '{embedding_init}'. Available: {available}")
 
