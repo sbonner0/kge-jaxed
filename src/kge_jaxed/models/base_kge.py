@@ -8,8 +8,8 @@ import jax.numpy as jnp
 from flax import nnx
 from jax import Array
 
-from kge_jaxed.models.base_embedding import BaseEmbedding
 from kge_jaxed.constraints.registry import get_constrainer
+from kge_jaxed.models.base_embedding import BaseEmbedding
 from kge_jaxed.regularization.registry import get_regularizer
 from kge_jaxed.rngs import make_model_rngs
 
