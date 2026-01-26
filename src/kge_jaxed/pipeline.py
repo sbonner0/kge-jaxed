@@ -120,6 +120,7 @@ def train_step_fn(
 
     loss, grads = nnx.value_and_grad(loss_on_model)(model)
     optimizer.update(model, grads)
+    model.apply_constraints()
 
     return loss
 
