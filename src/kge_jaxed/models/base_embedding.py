@@ -4,6 +4,7 @@ from typing import Any
 import jax.numpy as jnp
 from flax import nnx
 from flax.typing import Dtype
+from jax import Array
 
 from kge_jaxed.models.initializers import resolve_embedding_init
 from kge_jaxed.rngs import make_model_rngs
@@ -84,3 +85,9 @@ class BaseEmbedding(nnx.Module):
 
     def weights(self) -> jnp.ndarray:
         return jnp.asarray(self.emb.embedding[...])
+
+    def apply_constrainer(self, constrainer: Callable[[Array], Array] | None) -> None:
+        if constrainer is None:
+            return
+        constrained = constrainer(jnp.asarray(self.emb.embedding))
+        self.emb.embedding.set_value(constrained)

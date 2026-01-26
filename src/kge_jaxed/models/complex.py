@@ -38,6 +38,10 @@ class ComplEx(BaseKGE):
         relation_regularizer_name: str | None = None,
         entity_regularizer_kwargs: dict | None = None,
         relation_regularizer_kwargs: dict | None = None,
+        entity_constrainer_name: str | None = None,
+        relation_constrainer_name: str | None = None,
+        entity_constrainer_kwargs: dict | None = None,
+        relation_constrainer_kwargs: dict | None = None,
         rngs: nnx.Rngs | None = None,
         seed: int | None = None,
     ) -> None:
@@ -72,6 +76,14 @@ class ComplEx(BaseKGE):
         :type entity_regularizer_kwargs: dict | None, optional
         :param relation_regularizer_kwargs: Regularizer kwargs for relations (may include weight).
         :type relation_regularizer_kwargs: dict | None, optional
+        :param entity_constrainer_name: Constrainer name for entity embeddings.
+        :type entity_constrainer_name: str | None, optional
+        :param relation_constrainer_name: Constrainer name for relation embeddings.
+        :type relation_constrainer_name: str | None, optional
+        :param entity_constrainer_kwargs: Constrainer kwargs for entity embeddings.
+        :type entity_constrainer_kwargs: dict | None, optional
+        :param relation_constrainer_kwargs: Constrainer kwargs for relation embeddings.
+        :type relation_constrainer_kwargs: dict | None, optional
         :param rngs: Flax NNX RNGs for initialization and dropout.
         :type rngs: nnx.Rngs, optional
         :param seed: Seed used to create RNGs if none are provided.
@@ -82,46 +94,35 @@ class ComplEx(BaseKGE):
             "Complex Embeddings for Simple Link Prediction."
             ICML 2016.
         """
-        if entity_regularizer_name is None:
-            entity_regularizer_name = self.DEFAULT_ENTITY_REGULARIZER_NAME
-            entity_regularizer_kwargs = {
-                **self.DEFAULT_ENTITY_REGULARIZER_KWARGS,
-                **(entity_regularizer_kwargs or {}),
-            }
-        elif entity_regularizer_name == self.DEFAULT_ENTITY_REGULARIZER_NAME:
-            entity_regularizer_kwargs = {
-                **self.DEFAULT_ENTITY_REGULARIZER_KWARGS,
-                **(entity_regularizer_kwargs or {}),
-            }
-
-        if relation_regularizer_name is None:
-            relation_regularizer_name = self.DEFAULT_RELATION_REGULARIZER_NAME
-            relation_regularizer_kwargs = {
-                **self.DEFAULT_RELATION_REGULARIZER_KWARGS,
-                **(relation_regularizer_kwargs or {}),
-            }
-        elif relation_regularizer_name == self.DEFAULT_RELATION_REGULARIZER_NAME:
-            relation_regularizer_kwargs = {
-                **self.DEFAULT_RELATION_REGULARIZER_KWARGS,
-                **(relation_regularizer_kwargs or {}),
-            }
+        entity_regularizer_name, entity_regularizer_kwargs = self._resolve_defaults(
+            entity_regularizer_name,
+            entity_regularizer_kwargs,
+            self.DEFAULT_ENTITY_REGULARIZER_NAME,
+            self.DEFAULT_ENTITY_REGULARIZER_KWARGS,
+        )
+        relation_regularizer_name, relation_regularizer_kwargs = self._resolve_defaults(
+            relation_regularizer_name,
+            relation_regularizer_kwargs,
+            self.DEFAULT_RELATION_REGULARIZER_NAME,
+            self.DEFAULT_RELATION_REGULARIZER_KWARGS,
+        )
 
         super().__init__(
             num_entities=num_entities,
             num_relations=num_relations,
             embedding_dim=embedding_dim,
-            entity_embedding_kwargs={
-                **self.DEFAULT_ENTITY_EMBEDDING_KWARGS,
-                **(entity_embedding_kwargs or {}),
-            },
-            relation_embedding_kwargs={
-                **self.DEFAULT_RELATION_EMBEDDING_KWARGS,
-                **(relation_embedding_kwargs or {}),
-            },
+            entity_embedding_kwargs=self._merge_kwargs(self.DEFAULT_ENTITY_EMBEDDING_KWARGS, entity_embedding_kwargs),
+            relation_embedding_kwargs=self._merge_kwargs(
+                self.DEFAULT_RELATION_EMBEDDING_KWARGS, relation_embedding_kwargs
+            ),
             entity_regularizer_name=entity_regularizer_name,
             relation_regularizer_name=relation_regularizer_name,
             entity_regularizer_kwargs=entity_regularizer_kwargs,
             relation_regularizer_kwargs=relation_regularizer_kwargs,
+            entity_constrainer_name=entity_constrainer_name,
+            relation_constrainer_name=relation_constrainer_name,
+            entity_constrainer_kwargs=entity_constrainer_kwargs,
+            relation_constrainer_kwargs=relation_constrainer_kwargs,
             rngs=rngs,
             seed=seed,
         )

@@ -2,6 +2,7 @@
 
 import optax
 
+from kge_jaxed.constraints import registry as constrainer_registry
 from kge_jaxed.loss_functions.losses import bce_loss, margin_ranking_loss, softplus_loss
 from kge_jaxed.models.complex import ComplEx
 from kge_jaxed.models.distmult import DistMult
@@ -100,6 +101,16 @@ def list_regularizers():
 # Re-export regularizer registry helpers for backwards compatibility.
 REGULARIZERS = regularizer_registry.REGULARIZERS
 get_regularizer = regularizer_registry.get_regularizer
+
+
+def list_constrainers():
+    """Return list of available constrainer names."""
+    return constrainer_registry.list_constrainers()
+
+
+# Re-export constrainer registry helpers for convenience.
+CONSTRAINERS = constrainer_registry.CONSTRAINERS
+get_constrainer = constrainer_registry.get_constrainer
 
 
 def list_samplers():
