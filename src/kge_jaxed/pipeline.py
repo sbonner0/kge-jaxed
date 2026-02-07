@@ -138,7 +138,7 @@ class KGEPipeline:
         dataset: BaseDataset | str,
         model_kwargs: dict[str, Any] | None = None,
         train_batch_size: int = 32,
-        embedding_dim: int = 100,
+        embedding_dim: int = 128,
         negative_samples: int = 1,
         learning_rate: float = 1e-3,
         optimizer_name: str = "adam",
@@ -391,8 +391,7 @@ class KGEPipeline:
         eval_df: pd.DataFrame | None = None,
         filtered: bool = True,
         eval_batch_size: int | None = None,
-        return_ranks_df: bool = False,
-    ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Evaluate model using ranking metrics (MRR, MR, Hits@K).
 
@@ -410,12 +409,10 @@ class KGEPipeline:
         :type filtered: bool
         :param eval_batch_size: Batch size for grouped evaluation
         :type eval_batch_size: int | None
-        :param return_ranks_df: Return the evaluation triples with head/tail ranks and scores
-        :type return_ranks_df: bool
-        :return: Metrics DataFrame, and optionally the ranked triples DataFrame
-        :rtype: pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]
+        :return: Metrics DataFrame and the ranked triples DataFrame
+        :rtype: tuple[pd.DataFrame, pd.DataFrame]
         """
-        # Get test triples
+        # Get triples to evaluate on (validate if eval_df is provided, otherwise select by split)
         if eval_df is None:
             if split is None:
                 raise ValueError("split must be provided when eval_df is not set")
@@ -424,6 +421,8 @@ class KGEPipeline:
                 "valid": self.dataset.val_df,
                 "test": self.dataset.test_df,
             }
+            if split not in split_map:
+                raise ValueError(f"Invalid split: {split}. Expected one of {list(split_map.keys())}.")
             eval_df = split_map[split]
         else:
             if split is not None:
@@ -431,21 +430,12 @@ class KGEPipeline:
             validate_eval_df(eval_df, self.dataset.num_entities, self.dataset.num_relations)
         eval_df = eval_df.reset_index(drop=True)
 
-        total_triples = len(eval_df)
-        if total_triples == 0:
-            raise ValueError("No triples found for evaluation.")
-
         if eval_batch_size is None:
             eval_batch_size = self.dataset.batch_size
 
-        print(f"Evaluating on {total_triples} triples (grouped, filtered: {filtered})...")
-
-        tail_ranks = np.empty(total_triples, dtype=np.int32)
-        head_ranks = np.empty(total_triples, dtype=np.int32)
-
         # Build eval groups (unique keys -> row indices + true entities)
-        tail_group_indices, tail_group_tails, tail_pairs = build_group_maps(eval_df, ["head", "relation"], "tail")
-        head_group_indices, head_group_heads, head_pairs = build_group_maps(eval_df, ["relation", "tail"], "head")
+        tail_groups, tail_pairs = build_group_maps(eval_df, ["head", "relation"], "tail")
+        head_groups, head_pairs = build_group_maps(eval_df, ["relation", "tail"], "head")
 
         # Build filter maps from all triples (for filtered evaluation)
         tail_filter_map: dict[tuple[int, int], np.ndarray] = {}
@@ -458,37 +448,24 @@ class KGEPipeline:
             tail_filter_map = build_filter_map(filter_triples, ["head", "relation"], "tail")
             head_filter_map = build_filter_map(filter_triples, ["relation", "tail"], "head")
 
-        tail_scores = None
-        head_scores = None
-        if return_ranks_df:
-            tail_scores = np.empty(total_triples, dtype=np.float32)
-            head_scores = np.empty(total_triples, dtype=np.float32)
-
-        tail_ranks = score_grouped_pairs(
+        # Score all unique pairs and assign ranks to true entities in each group for head and tail corruption
+        tail_ranks, tail_scores = score_grouped_pairs(
             self.model,
             tail_pairs,
-            tail_group_indices,
-            tail_group_tails,
+            tail_groups,
             tail_filter_map,
             "tail",
             self.dataset.num_entities,
             eval_batch_size,
-            total_triples,
-            "tail",
-            scores_out=tail_scores,
         )
-        head_ranks = score_grouped_pairs(
+        head_ranks, head_scores = score_grouped_pairs(
             self.model,
             head_pairs,
-            head_group_indices,
-            head_group_heads,
+            head_groups,
             head_filter_map,
             "head",
             self.dataset.num_entities,
             eval_batch_size,
-            total_triples,
-            "head",
-            scores_out=head_scores,
         )
 
         # Compute metrics from ranks (per side + average)
@@ -497,14 +474,11 @@ class KGEPipeline:
         print(f"\nRanking Results ({split} set, both corruption):")
         print(metrics_df)
 
-        if not return_ranks_df:
-            return metrics_df
-
+        # Create a DataFrame with ranks and scores for all evaluated triples
         ranks_df = eval_df.copy()
         ranks_df["rank_head"] = head_ranks
         ranks_df["rank_tail"] = tail_ranks
-        if head_scores is not None and tail_scores is not None:
-            ranks_df["score_head"] = head_scores
-            ranks_df["score_tail"] = tail_scores
+        ranks_df["score_head"] = head_scores
+        ranks_df["score_tail"] = tail_scores
 
         return metrics_df, ranks_df

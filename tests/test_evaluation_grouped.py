@@ -119,7 +119,6 @@ def test_grouped_eval_unfiltered_matches_reference():
         split="test",
         filtered=False,
         eval_batch_size=2,
-        return_ranks_df=True,
     )
 
     assert ranks_df["rank_head"].tolist() == ref_head
@@ -142,7 +141,6 @@ def test_grouped_eval_filtered_matches_reference():
         split="test",
         filtered=True,
         eval_batch_size=2,
-        return_ranks_df=True,
     )
 
     assert ranks_df["rank_head"].tolist() == ref_head
