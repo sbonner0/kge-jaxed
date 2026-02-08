@@ -23,7 +23,7 @@ from kge_jaxed.negative_sampling.uniform_negative_sampling import (
     uniform_balanced_sampler,
 )
 from kge_jaxed.registries import get_loss, get_model, get_optimizer
-from kge_jaxed.rngs import RngManager, make_model_rngs
+from kge_jaxed.rngs import RngManager
 from kge_jaxed.training import checkpointing as ckpt
 
 # ----------------------------- #
@@ -57,7 +57,6 @@ def _score_pos_neg(
         "num_negative_samples",
         "num_entities",
         "loss_fn",
-        "use_dropout",
     ),
 )
 def train_step_fn(
@@ -68,7 +67,6 @@ def train_step_fn(
     num_negative_samples: int,
     num_entities: int,
     loss_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray],
-    use_dropout: bool,
 ) -> jnp.ndarray:
     """
     A JIT-optimised function to take a training step for KGE model. This function
@@ -88,13 +86,12 @@ def train_step_fn(
     :type num_entities: int
     :param loss_fn: Loss function that consumes (pos_scores, neg_scores)
     :type loss_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray]
-    :param use_dropout: Whether to pass dropout RNGs into scoring
-    :type use_dropout: bool
     :return: Computed loss value
     :rtype: jnp.ndarray
     """
 
     def loss_on_model(m: BaseKGE) -> jnp.ndarray:
+        use_dropout = bool(getattr(m, "uses_dropout", False))
         if use_dropout:
             neg_key, dropout_key = jax.random.split(step_key, 2)
             dropout_rngs = nnx.Rngs(dropout=dropout_key)
@@ -133,78 +130,95 @@ class KGEPipeline:
 
     def __init__(
         self,
-        model_name: str,
+        model: str | BaseKGE,
+        dataset: str | BaseDataset,
         loss_name: str,
-        dataset: BaseDataset | str,
         model_kwargs: dict[str, Any] | None = None,
-        train_batch_size: int = 32,
+        dataset_kwargs: dict[str, Any] | None = None,
         embedding_dim: int = 128,
         negative_samples: int = 1,
         learning_rate: float = 1e-3,
         optimizer_name: str = "adam",
         optimizer_kwargs: dict[str, Any] | None = None,
-        use_dropout: bool | None = None,
         seed: int = 42,
-        model_seed: int | None = None,
-        dataset_seed: int | None = None,
     ) -> None:
         """Initialize the KGE training pipeline."""
 
-        self.model_name = model_name
-        self.embedding_dim = int(embedding_dim)
-        self.model_kwargs = {} if model_kwargs is None else dict(model_kwargs)
+        model_kwargs = {} if model_kwargs is None else dict(model_kwargs)
+        dataset_kwargs = {} if dataset_kwargs is None else dict(dataset_kwargs)
         self.negative_samples = int(negative_samples)
         self.learning_rate = float(learning_rate)
         self.optimizer_name = str(optimizer_name)
         self.optimizer_kwargs = {} if optimizer_kwargs is None else dict(optimizer_kwargs)
         self.seed = int(seed)
-        self.model_seed = None if model_seed is None else int(model_seed)
-        self.dataset_seed = int(self.seed if dataset_seed is None else dataset_seed)
 
         # Training state (checkpoint-resumable)
         self.epoch = 0
         self.global_step = 0
 
-        # Sort out dataset input
-        self.dataset: BaseDataset
-        if isinstance(dataset, str):
-            self.dataset = PyKEENDataset(
-                dataset_name=dataset,
-                batch_size=train_batch_size,
-                seed=self.dataset_seed,
-            )
-            self.dataset_name = dataset
-        elif isinstance(dataset, BaseDataset):
-            self.dataset = dataset
-            self.dataset_name = getattr(dataset, "dataset_name", None)
-        else:
-            raise TypeError("dataset must be a dataset name or a BaseDataset instance")
+        self.dataset, self.dataset_name = self._resolve_dataset(dataset, dataset_kwargs)
 
-        # Get model and loss from registries
-        model_cls = get_model(model_name)
+        # Loss from registry
         self.loss_fn = get_loss(loss_name)
 
-        # Keys: base -> split for init vs training
-        # Dedicated RNGs (separate model init from training steps)
         self.rng_manager = RngManager(self.seed)
-        init_rngs = self.rng_manager.init_rngs() if self.model_seed is None else make_model_rngs(self.model_seed)
 
-        # Build model
-        self.model: BaseKGE = model_cls(
-            num_entities=self.dataset.num_entities,
-            num_relations=self.dataset.num_relations,
-            entity_embedding_dim=embedding_dim,
-            rngs=init_rngs,
-            **self.model_kwargs,
+        self.model, self.model_name, self.embedding_dim, self.model_kwargs = self._resolve_model(
+            model=model,
+            model_kwargs=model_kwargs,
+            embedding_dim=embedding_dim,
         )
-
-        if use_dropout is None:
-            self.use_dropout = self.model.uses_dropout
-        else:
-            self.use_dropout = bool(use_dropout)
 
         # Optimizer bound to NNX params
         self.optimizer = self._build_optimizer(self.model)
+
+    def _resolve_dataset(self, dataset: str | BaseDataset, dataset_kwargs: dict[str, Any]) -> tuple[BaseDataset, str]:
+        if isinstance(dataset, str):
+            resolved_dataset_kwargs = dict(dataset_kwargs)
+            resolved_dataset_kwargs.setdefault("seed", self.seed)
+            resolved_dataset = PyKEENDataset(
+                dataset_name=dataset,
+                **resolved_dataset_kwargs,
+            )
+            return resolved_dataset, dataset
+        if isinstance(dataset, BaseDataset):
+            if dataset_kwargs:
+                raise ValueError("dataset_kwargs is only supported when dataset is a string name")
+            dataset_name = getattr(dataset, "dataset_name", "custom_dataset")
+            return dataset, dataset_name
+        raise TypeError("dataset must be a dataset name string or BaseDataset instance")
+
+    def _resolve_model(
+        self,
+        model: str | BaseKGE,
+        model_kwargs: dict[str, Any],
+        embedding_dim: int,
+    ) -> tuple[BaseKGE, str, int, dict[str, Any]]:
+        if isinstance(model, str):
+            model_name = model
+            resolved_embedding_dim = int(embedding_dim)
+            model_cls = get_model(model_name)
+            resolved_model = model_cls(
+                num_entities=self.dataset.num_entities,
+                num_relations=self.dataset.num_relations,
+                entity_embedding_dim=resolved_embedding_dim,
+                rngs=self.rng_manager.init_rngs(),
+                **model_kwargs,
+            )
+            return resolved_model, model_name, resolved_embedding_dim, model_kwargs
+
+        if isinstance(model, BaseKGE):
+            if model_kwargs:
+                raise ValueError("model_kwargs is only supported when model is a string name")
+            if getattr(model, "num_entities", self.dataset.num_entities) != self.dataset.num_entities:
+                raise ValueError("Provided model num_entities does not match dataset.num_entities")
+            if getattr(model, "num_relations", self.dataset.num_relations) != self.dataset.num_relations:
+                raise ValueError("Provided model num_relations does not match dataset.num_relations")
+            model_name = model.__class__.__name__.lower()
+            resolved_embedding_dim = int(getattr(model, "entity_embedding_dim", embedding_dim))
+            return model, model_name, resolved_embedding_dim, {}
+
+        raise TypeError("model must be either a model name string or a BaseKGE instance")
 
     def _build_optimizer(self, model: BaseKGE) -> nnx.Optimizer:
         optimizer_factory = get_optimizer(self.optimizer_name)
@@ -356,7 +370,6 @@ class KGEPipeline:
                     self.negative_samples,
                     self.dataset.num_entities,
                     self.loss_fn,
-                    self.use_dropout,
                 )  # type: ignore[call-arg]
 
                 loss_value = float(jnp.asarray(loss))

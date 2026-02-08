@@ -92,10 +92,9 @@ def _reference_ranks(
 def _make_pipeline() -> KGEPipeline:
     dataset = DummyDataset()
     pipeline = KGEPipeline(
-        model_name="transe",
+        model="transe",
         loss_name="mrl",
         dataset=dataset,
-        train_batch_size=2,
         embedding_dim=4,
         seed=0,
     )
