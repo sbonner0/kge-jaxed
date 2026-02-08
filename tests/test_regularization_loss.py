@@ -8,7 +8,7 @@ class DummyKGE(BaseKGE):
         super().__init__(
             num_entities=1,
             num_relations=1,
-            embedding_dim=1,
+            entity_embedding_dim=1,
             **kwargs,
         )
         self._entity_w = jnp.asarray(entity_w)
@@ -31,11 +31,8 @@ def test_entity_relation_regularization_loss():
     model = DummyKGE(
         entity_w,
         relation_w,
-        entity_regularizer_name="lp",
-        entity_regularizer_kwargs={"p": 1.0, "weight": 0.5},
-        relation_regularizer_name="lp",
-        relation_regularizer_kwargs={"p": 2.0, "weight": 2.0},
-        seed=0,
+        entity_regularizer_kwargs={"name": "lp", "p": 1.0, "weight": 0.5},
+        relation_regularizer_kwargs={"name": "lp", "p": 2.0, "weight": 2.0},
     )
 
     loss = float(model.regularization_loss())

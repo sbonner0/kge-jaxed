@@ -15,23 +15,21 @@ from kge_jaxed.rngs import make_model_rngs
 
 
 class BaseKGE(ABC, nnx.Module):
+    """Base class for knowledge graph embedding models."""
+
     def __init__(
         self,
         num_entities: int,
         num_relations: int,
-        embedding_dim: int,
+        entity_embedding_dim: int,
+        relation_embedding_dim: int | None = None,
         entity_embedding_kwargs: dict | None = None,
         relation_embedding_kwargs: dict | None = None,
-        entity_regularizer_name: str | None = None,
-        relation_regularizer_name: str | None = None,
         entity_regularizer_kwargs: dict | None = None,
         relation_regularizer_kwargs: dict | None = None,
-        entity_constrainer_name: str | None = None,
-        relation_constrainer_name: str | None = None,
         entity_constrainer_kwargs: dict | None = None,
         relation_constrainer_kwargs: dict | None = None,
         rngs: nnx.Rngs | None = None,
-        seed: int | None = None,
     ) -> None:
         """
         Initialize the base class for knowledge graph embedding models.
@@ -40,42 +38,41 @@ class BaseKGE(ABC, nnx.Module):
         :type num_entities: int
         :param num_relations: Number of relations.
         :type num_relations: int
-        :param embedding_dim: Dimensionality of the embeddings.
-        :type embedding_dim: int
+        :param entity_embedding_dim: Dimensionality of entity embeddings.
+        :type entity_embedding_dim: int
+        :param relation_embedding_dim: Dimensionality of relation embeddings. If None,
+            uses ``entity_embedding_dim``.
+        :type relation_embedding_dim: int | None, optional
         :param entity_embedding_kwargs: Args for the entity embedding, defaults to {}
         :type entity_embedding_kwargs: dict, optional
         :param relation_embedding_kwargs: Args for the relation embedding, defaults to {}
         :type relation_embedding_kwargs: dict, optional
-        :param entity_regularizer_name: Regularizer name for entity embeddings.
-        :type entity_regularizer_name: str | None, optional
-        :param relation_regularizer_name: Regularizer name for relation embeddings.
-        :type relation_regularizer_name: str | None, optional
-        :param entity_regularizer_kwargs: Regularizer kwargs for entities (may include weight).
+        :param entity_regularizer_kwargs: Regularizer config for entities. Supports
+            ``name`` and regularizer kwargs, plus optional ``weight`` handled by BaseKGE.
         :type entity_regularizer_kwargs: dict | None, optional
-        :param relation_regularizer_kwargs: Regularizer kwargs for relations (may include weight).
+        :param relation_regularizer_kwargs: Regularizer config for relations. Supports
+            ``name`` and regularizer kwargs, plus optional ``weight`` handled by BaseKGE.
         :type relation_regularizer_kwargs: dict | None, optional
-        :param entity_constrainer_name: Constrainer name for entity embeddings.
-        :type entity_constrainer_name: str | None, optional
-        :param relation_constrainer_name: Constrainer name for relation embeddings.
-        :type relation_constrainer_name: str | None, optional
-        :param entity_constrainer_kwargs: Constrainer kwargs for entity embeddings.
+        :param entity_constrainer_kwargs: Constrainer config for entity embeddings.
+            Supports ``name`` and constrainer kwargs.
         :type entity_constrainer_kwargs: dict | None, optional
-        :param relation_constrainer_kwargs: Constrainer kwargs for relation embeddings.
+        :param relation_constrainer_kwargs: Constrainer config for relation embeddings.
+            Supports ``name`` and constrainer kwargs.
         :type relation_constrainer_kwargs: dict | None, optional
-        :param rngs: RNGs for the module, required unless a seed is provided
+        :param rngs: RNGs for the module. If None, a default RNG stream is created
+            with seed ``42``.
         :type rngs: nnx.Rngs, optional
-        :param seed: Seed to initialize RNG streams if rngs is not provided
-        :type seed: int, optional
         """
 
         if rngs is None:
-            if seed is None:
-                raise ValueError("BaseKGE requires rngs or seed to be provided.")
-            rngs = make_model_rngs(seed)
+            rngs = make_model_rngs(42)
 
         self.num_entities = num_entities
         self.num_relations = num_relations
-        self.embedding_dim = embedding_dim
+        self.entity_embedding_dim = entity_embedding_dim
+        self.relation_embedding_dim = (
+            relation_embedding_dim if relation_embedding_dim is not None else entity_embedding_dim
+        )
 
         if entity_embedding_kwargs is None:
             entity_embedding_kwargs = {}
@@ -92,32 +89,30 @@ class BaseKGE(ABC, nnx.Module):
 
         # Build embeddings
         self.entity_embedding = BaseEmbedding(
-            num_embeddings=self.num_entities, embedding_dim=self.embedding_dim, **entity_embedding_kwargs, rngs=rngs
+            num_embeddings=self.num_entities,
+            embedding_dim=self.entity_embedding_dim,
+            **entity_embedding_kwargs,
+            rngs=rngs,
         )
         self.relation_embedding = BaseEmbedding(
-            num_embeddings=self.num_relations, embedding_dim=self.embedding_dim, **relation_embedding_kwargs, rngs=rngs
+            num_embeddings=self.num_relations,
+            embedding_dim=self.relation_embedding_dim,
+            **relation_embedding_kwargs,
+            rngs=rngs,
         )
 
-        self.entity_regularizer_name = entity_regularizer_name
-        self.relation_regularizer_name = relation_regularizer_name
-        self.entity_regularizer_kwargs = dict(entity_regularizer_kwargs)
-        self.relation_regularizer_kwargs = dict(relation_regularizer_kwargs)
-        self.entity_regularizer_weight = float(self.entity_regularizer_kwargs.pop("weight", 0.0))
-        self.relation_regularizer_weight = float(self.relation_regularizer_kwargs.pop("weight", 0.0))
-        if self.entity_regularizer_name is None and self.entity_regularizer_weight > 0:
-            raise ValueError("entity_regularizer_name must be set when entity_regularizer_weight > 0")
-        if self.relation_regularizer_name is None and self.relation_regularizer_weight > 0:
-            raise ValueError("relation_regularizer_name must be set when relation_regularizer_weight > 0")
-        self.entity_regularizer = self._build_regularizer(
-            self.entity_regularizer_name,
-            self.entity_regularizer_kwargs,
-        )
-        self.relation_regularizer = self._build_regularizer(
-            self.relation_regularizer_name,
-            self.relation_regularizer_kwargs,
-        )
-        self.entity_constrainer = self._build_constrainer(entity_constrainer_name, entity_constrainer_kwargs)
-        self.relation_constrainer = self._build_constrainer(relation_constrainer_name, relation_constrainer_kwargs)
+        # Build regularizers for entity and relation embeddings.
+        entity_regularizer_cfg = dict(entity_regularizer_kwargs)
+        self.entity_regularizer_weight = float(entity_regularizer_cfg.pop("weight", 0.0))
+        self.entity_regularizer = self._build_regularizer(entity_regularizer_cfg)
+
+        relation_regularizer_cfg = dict(relation_regularizer_kwargs)
+        self.relation_regularizer_weight = float(relation_regularizer_cfg.pop("weight", 0.0))
+        self.relation_regularizer = self._build_regularizer(relation_regularizer_cfg)
+
+        # Build constrainers for entity and relation embeddings
+        self.entity_constrainer = self._build_constrainer(entity_constrainer_kwargs)
+        self.relation_constrainer = self._build_constrainer(relation_constrainer_kwargs)
 
     def score_hrt(self, triples: Array, *, dropout_rngs: nnx.Rngs | None = None) -> Array:
         """
@@ -138,6 +133,7 @@ class BaseKGE(ABC, nnx.Module):
 
         return self.interaction_function(h, r, t)
 
+    @property
     def uses_dropout(self) -> bool:
         return bool(self.entity_embedding.dropout_rate) or bool(self.relation_embedding.dropout_rate)
 
@@ -148,9 +144,17 @@ class BaseKGE(ABC, nnx.Module):
         return self.relation_embedding.weights()
 
     def regularization_loss(self) -> Array:
+        """
+        Compute the regularization loss for entity and relation embeddings.
+
+        :return: Regularization loss
+        :rtype: Array
+        """
         loss = jnp.array(0.0)
+
         if self.entity_regularizer is not None and self.entity_regularizer_weight > 0:
             loss = loss + jnp.asarray(self.entity_regularizer_weight) * self.entity_regularizer(self.entity_weights())
+
         if self.relation_regularizer is not None and self.relation_regularizer_weight > 0:
             loss = loss + jnp.asarray(self.relation_regularizer_weight) * self.relation_regularizer(
                 self.relation_weights()
@@ -158,48 +162,32 @@ class BaseKGE(ABC, nnx.Module):
         return loss
 
     def apply_constraints(self) -> None:
+        """
+        Apply constraints to entity and relation embeddings if constrainers are defined.
+        """
         if self.entity_constrainer is None and self.relation_constrainer is None:
             return
         self.entity_embedding.apply_constrainer(self.entity_constrainer)
         self.relation_embedding.apply_constrainer(self.relation_constrainer)
 
     @staticmethod
-    def _merge_kwargs(defaults: dict[str, Any] | None, overrides: dict[str, Any] | None) -> dict[str, Any]:
-        merged: dict[str, Any] = {}
-        if defaults:
-            merged.update(defaults)
-        if overrides:
-            merged.update(overrides)
-        return merged
-
-    @classmethod
-    def _resolve_defaults(
-        cls,
-        name: str | None,
-        kwargs: dict[str, Any] | None,
-        default_name: str | None,
-        default_kwargs: dict[str, Any] | None,
-    ) -> tuple[str | None, dict[str, Any] | None]:
-        if name is None:
-            name = default_name
-            kwargs = cls._merge_kwargs(default_kwargs, kwargs)
-        elif name == default_name:
-            kwargs = cls._merge_kwargs(default_kwargs, kwargs)
-        return name, kwargs
-
-    @staticmethod
-    def _build_regularizer(name: str | None, kwargs: dict[str, Any]) -> Any | None:
+    def _build_regularizer(kwargs: dict[str, Any]) -> Any | None:
+        name = kwargs.get("name")
         if name is None:
             return None
+
         regularizer_cls = get_regularizer(name)
-        return regularizer_cls(**kwargs)
+        regularizer_kwargs = {k: v for k, v in kwargs.items() if k != "name"}
+        return regularizer_cls(**regularizer_kwargs)
 
     @staticmethod
-    def _build_constrainer(name: str | None, kwargs: dict[str, Any]) -> Callable[[Array], Array] | None:
+    def _build_constrainer(kwargs: dict[str, Any]) -> Callable[[Array], Array] | None:
+        name = kwargs.get("name")
         if name is None:
             return None
         constrainer_factory = get_constrainer(name)
-        return constrainer_factory(**kwargs)
+        constrainer_kwargs = {k: v for k, v in kwargs.items() if k != "name"}
+        return constrainer_factory(**constrainer_kwargs)
 
     @abstractmethod
     def interaction_function(self, h: Array, r: Array, t: Array) -> Array:

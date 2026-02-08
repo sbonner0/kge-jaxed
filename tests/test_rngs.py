@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from flax import nnx
 
 from kge_jaxed.models.transe import TransE
+from kge_jaxed.rngs import make_model_rngs
 
 
 def _param_leaves(model: nnx.Module) -> list[jax.Array]:
@@ -11,8 +12,8 @@ def _param_leaves(model: nnx.Module) -> list[jax.Array]:
 
 
 def test_model_init_same_seed() -> None:
-    model_a = TransE(num_entities=10, num_relations=5, embedding_dim=8, seed=0)
-    model_b = TransE(num_entities=10, num_relations=5, embedding_dim=8, seed=0)
+    model_a = TransE(num_entities=10, num_relations=5, entity_embedding_dim=8, rngs=make_model_rngs(0))
+    model_b = TransE(num_entities=10, num_relations=5, entity_embedding_dim=8, rngs=make_model_rngs(0))
 
     leaves_a = _param_leaves(model_a)
     leaves_b = _param_leaves(model_b)
@@ -22,8 +23,8 @@ def test_model_init_same_seed() -> None:
 
 
 def test_model_init_different_seed() -> None:
-    model_a = TransE(num_entities=10, num_relations=5, embedding_dim=8, seed=0)
-    model_b = TransE(num_entities=10, num_relations=5, embedding_dim=8, seed=1)
+    model_a = TransE(num_entities=10, num_relations=5, entity_embedding_dim=8, rngs=make_model_rngs(0))
+    model_b = TransE(num_entities=10, num_relations=5, entity_embedding_dim=8, rngs=make_model_rngs(1))
 
     leaves_a = _param_leaves(model_a)
     leaves_b = _param_leaves(model_b)

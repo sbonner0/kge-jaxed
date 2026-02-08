@@ -3,14 +3,15 @@ import jax.numpy as jnp
 from flax import nnx
 
 from kge_jaxed.models.transe import TransE
+from kge_jaxed.rngs import make_model_rngs
 
 
 def test_dropout_rng_determinism() -> None:
     model = TransE(
         num_entities=10,
         num_relations=5,
-        embedding_dim=16,
-        seed=0,
+        entity_embedding_dim=16,
+        rngs=make_model_rngs(0),
         entity_embedding_kwargs={"dropout_rate": 0.5},
         relation_embedding_kwargs={"dropout_rate": 0.5},
     )
