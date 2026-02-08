@@ -193,13 +193,13 @@ class KGEPipeline:
         self.model: BaseKGE = model_cls(
             num_entities=self.dataset.num_entities,
             num_relations=self.dataset.num_relations,
-            embedding_dim=embedding_dim,
+            entity_embedding_dim=embedding_dim,
             rngs=init_rngs,
             **self.model_kwargs,
         )
 
         if use_dropout is None:
-            self.use_dropout = self.model.uses_dropout()
+            self.use_dropout = self.model.uses_dropout
         else:
             self.use_dropout = bool(use_dropout)
 
