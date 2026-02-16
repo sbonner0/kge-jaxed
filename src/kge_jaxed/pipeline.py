@@ -84,7 +84,8 @@ def train_step_fn(
     :type num_negative_samples: int
     :param num_entities: Total number of entities in the knowledge graph
     :type num_entities: int
-    :param loss_fn: Loss function that consumes (pos_scores, neg_scores)
+    :param loss_fn: Loss function that consumes (pos_scores, neg_scores). The
+        score convention is ``higher is better`` for both arrays.
     :type loss_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray]
     :return: Computed loss value
     :rtype: jnp.ndarray
@@ -141,16 +142,19 @@ class KGEPipeline:
         optimizer_name: str = "adam",
         optimizer_kwargs: dict[str, Any] | None = None,
         seed: int = 42,
+        loss_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the KGE training pipeline."""
 
         model_kwargs = {} if model_kwargs is None else dict(model_kwargs)
         dataset_kwargs = {} if dataset_kwargs is None else dict(dataset_kwargs)
+        loss_kwargs = {} if loss_kwargs is None else dict(loss_kwargs)
         self.negative_samples = int(negative_samples)
         self.learning_rate = float(learning_rate)
         self.optimizer_name = str(optimizer_name)
         self.optimizer_kwargs = {} if optimizer_kwargs is None else dict(optimizer_kwargs)
         self.seed = int(seed)
+        self.loss_kwargs = loss_kwargs
 
         # Training state (checkpoint-resumable)
         self.epoch = 0
@@ -159,7 +163,7 @@ class KGEPipeline:
         self.dataset, self.dataset_name = self._resolve_dataset(dataset, dataset_kwargs)
 
         # Loss from registry
-        self.loss_fn = get_loss(loss_name)
+        self.loss_fn = get_loss(loss_name, **self.loss_kwargs)
 
         self.rng_manager = RngManager(self.seed)
 

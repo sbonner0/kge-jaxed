@@ -65,3 +65,8 @@ commands = [["pytest", "tests/"]]
 deps = ["ruff"]
 commands = [["ruff", "check", "src"], ["ruff", "format", "--check", "src"]]
 skip_install = true
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:Implicit conversion of an array to a dtype is deprecated; rather than dtype=arr use dtype=arr.dtype. In the future this will result in an error\\.:DeprecationWarning",
+]
