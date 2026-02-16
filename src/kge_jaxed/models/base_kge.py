@@ -15,7 +15,12 @@ from kge_jaxed.rngs import make_model_rngs
 
 
 class BaseKGE(ABC, nnx.Module):
-    """Base class for knowledge graph embedding models."""
+    """Base class for knowledge graph embedding models.
+
+    Score convention:
+        Implementations must return scores where ``higher is better`` (more plausible).
+        All built-in losses are written against this convention.
+    """
 
     def __init__(
         self,
@@ -122,7 +127,7 @@ class BaseKGE(ABC, nnx.Module):
         :type triples: Array
         :param dropout_rngs: RNGs for dropout, defaults to None
         :type dropout_rngs: nnx.Rngs | None, optional
-        :return: Scores for each triple of shape [B]
+        :return: Scores for each triple of shape [B], where higher means more plausible
         :rtype: Array
         """
 
@@ -191,4 +196,5 @@ class BaseKGE(ABC, nnx.Module):
 
     @abstractmethod
     def interaction_function(self, h: Array, r: Array, t: Array) -> Array:
+        """Compute triple plausibility scores with the ``higher is better`` convention."""
         raise NotImplementedError

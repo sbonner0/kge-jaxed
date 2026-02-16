@@ -1,8 +1,10 @@
+import jax.numpy as jnp
 import pandas as pd
 import pytest
 
 import kge_jaxed.pipeline as pipeline_module
 from kge_jaxed.datasets.base import BaseDataset
+from kge_jaxed.loss_functions.losses import self_adversarial_negative_sampling_loss
 from kge_jaxed.models.transe import TransE
 from kge_jaxed.pipeline import KGEPipeline
 from kge_jaxed.rngs import make_model_rngs
@@ -130,3 +132,30 @@ def test_pipeline_rejects_dataset_kwargs_with_dataset_instance():
             dataset=dataset,
             dataset_kwargs={"batch_size": 7},
         )
+
+
+def test_pipeline_accepts_nssa_loss_kwargs():
+    dataset = DummyDataset()
+
+    pipeline = KGEPipeline(
+        model="transe",
+        loss_name="nssa",
+        dataset=dataset,
+        embedding_dim=8,
+        loss_kwargs={
+            "adversarial_temperature": 1.2,
+            "margin": 9.0,
+        },
+    )
+
+    triples = jnp.array(dataset.train_df[["head", "relation", "tail"]].to_numpy())
+    pos_scores = pipeline.model.score_hrt(triples)
+    neg_scores = pos_scores[:, None]
+    actual = pipeline.loss_fn(pos_scores, neg_scores)
+    expected = self_adversarial_negative_sampling_loss(
+        pos_scores,
+        neg_scores,
+        adversarial_temperature=1.2,
+        margin=9.0,
+    )
+    assert actual == pytest.approx(float(expected))

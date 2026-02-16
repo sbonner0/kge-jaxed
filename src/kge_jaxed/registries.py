@@ -1,9 +1,16 @@
 """Central registry for all models, losses, regularizers, samplers, and optimizers."""
 
+from functools import partial
+
 import optax
 
 from kge_jaxed.constraints import registry as constrainer_registry
-from kge_jaxed.loss_functions.losses import bce_loss, margin_ranking_loss, softplus_loss
+from kge_jaxed.loss_functions.losses import (
+    bce_loss,
+    margin_ranking_loss,
+    self_adversarial_negative_sampling_loss,
+    softplus_loss,
+)
 from kge_jaxed.models.complex import ComplEx
 from kge_jaxed.models.distmult import DistMult
 from kge_jaxed.models.transe import TransE
@@ -29,6 +36,7 @@ LOSSES = {
     "mrl": margin_ranking_loss,
     "bce": bce_loss,
     "softplus": softplus_loss,
+    "nssa": self_adversarial_negative_sampling_loss,
 }
 
 # ============================================
@@ -62,11 +70,14 @@ def get_model(name: str):
     return MODELS[name]
 
 
-def get_loss(name: str):
+def get_loss(name: str, **kwargs):
     """Get loss function by name."""
     if name not in LOSSES:
         raise ValueError(f"Unknown loss '{name}'. Available: {list(LOSSES.keys())}")
-    return LOSSES[name]
+    loss_fn = LOSSES[name]
+    if not kwargs:
+        return loss_fn
+    return partial(loss_fn, **kwargs)
 
 
 def get_sampler(name: str):
