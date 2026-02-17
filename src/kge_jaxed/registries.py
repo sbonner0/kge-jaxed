@@ -13,6 +13,7 @@ from kge_jaxed.loss_functions.losses import (
 )
 from kge_jaxed.models.complex import ComplEx
 from kge_jaxed.models.distmult import DistMult
+from kge_jaxed.models.rotate import RotatE
 from kge_jaxed.models.transe import TransE
 
 # Import samplers
@@ -26,6 +27,7 @@ MODELS = {
     "transe": TransE,
     "distmult": DistMult,
     "complex": ComplEx,
+    "rotate": RotatE,
 }
 
 

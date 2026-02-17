@@ -90,6 +90,19 @@ def test_pipeline_accepts_model_name_string():
     assert pipeline.model_name == "transe"
 
 
+def test_pipeline_accepts_rotate_model_name_string():
+    dataset = DummyDataset()
+
+    pipeline = KGEPipeline(
+        model="rotate",
+        loss_name="mrl",
+        dataset=dataset,
+        embedding_dim=8,
+    )
+
+    assert pipeline.model_name == "rotate"
+
+
 def test_pipeline_forwards_dataset_kwargs_for_dataset_name(monkeypatch):
     captured: dict[str, object] = {}
 
