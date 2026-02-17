@@ -17,6 +17,25 @@ def _complex_from_real_init(real_init: Callable) -> Callable:
     return init
 
 
+def _complex_phase_init() -> Callable:
+    def init(key, shape, dtype=jnp.complex64):
+        dtype = jnp.dtype(dtype)
+        if not jnp.issubdtype(dtype, jnp.complexfloating):
+            raise TypeError("init_phases requires a complex dtype.")
+
+        real_dtype = jnp.float64 if dtype == jnp.complex128 else jnp.float32
+        phases = jax.random.uniform(
+            key,
+            shape,
+            minval=0.0,
+            maxval=2.0 * jnp.pi,
+            dtype=real_dtype,
+        )
+        return jnp.cos(phases).astype(dtype) + 1j * jnp.sin(phases).astype(dtype)
+
+    return init
+
+
 def resolve_embedding_init(
     embedding_init: str | Callable | None, embedding_init_kwargs: dict | None
 ) -> Callable | None:
@@ -61,6 +80,8 @@ def resolve_embedding_init(
         return nnx_initializers.orthogonal(**kwargs)
     if name in {"complex_uniform"}:
         return _complex_from_real_init(nnx_initializers.uniform(**kwargs))
+    if name in {"complex_phases", "init_phases", "phases"}:
+        return _complex_phase_init()
 
     available = [
         "default",
@@ -76,6 +97,9 @@ def resolve_embedding_init(
         "ones",
         "orthogonal",
         "complex_uniform",
+        "complex_phases",
+        "init_phases",
+        "phases",
     ]
     raise ValueError(f"Unknown embedding_init '{embedding_init}'. Available: {available}")
 

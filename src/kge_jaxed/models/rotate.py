@@ -5,19 +5,26 @@ from jax import Array
 from kge_jaxed.models.base_kge import BaseKGE
 
 
-class TransE(BaseKGE):
-    """TransE model for knowledge graph embedding."""
+class RotatE(BaseKGE):
+    """RotatE model for knowledge graph embedding."""
 
-    DEFAULT_EMBEDDING_DIM = 50
+    DEFAULT_ENTITY_EMBEDDING_SIZE = 128
+    DEFAULT_ENTITY_EMBEDDING_KWARGS = {
+        "param_dtype": jnp.complex64,
+        "embedding_init": "complex_normal",
+    }
+    DEFAULT_RELATION_EMBEDDING_KWARGS = {
+        "param_dtype": jnp.complex64,
+        "embedding_init": "complex_phases",
+    }
+    DEFAULT_RELATION_CONSTRAINER_KWARGS = {"name": "unit_modulus"}
     DEFAULT_NORM = 1
-    DEFAULT_ENTITY_CONSTRAINER_KWARGS = {"name": "unit_norm"}
-    DEFAULT_RELATION_CONSTRAINER_KWARGS = {"name": "unit_norm"}
 
     def __init__(
         self,
         num_entities: int,
         num_relations: int,
-        entity_embedding_dim: int = DEFAULT_EMBEDDING_DIM,
+        entity_embedding_dim: int = DEFAULT_ENTITY_EMBEDDING_SIZE,
         relation_embedding_dim: int | None = None,
         norm: int = DEFAULT_NORM,
         entity_embedding_kwargs: dict | None = None,
@@ -29,18 +36,21 @@ class TransE(BaseKGE):
         rngs: nnx.Rngs | None = None,
     ) -> None:
         """
-        Initialize a TransE model.
+        Initialize a RotatE model.
 
-        TransE models relations as translations in embedding space: a valid triple
-        (h, r, t) should satisfy h + r ≈ t. The score used during training is the
-        negative p-norm distance between h + r and t:
-            score(h, r, t) = -||h + r - t||_p
+        RotatE models relations as rotations in the complex plane: a valid triple (h, r, t) should satisfy h * r ≈ t.
+        The score used during training is the negative p-norm distance between h * r and t:
+            score(h, r, t) = -||h * r - t||_p
+        where p is the norm specified by ``norm``, h, r, t are complex embeddings, and * is elementwise complex
+        multiplication. r is constrained to lie on the unit circle in the complex plane, ensuring it represents a
+        pure rotation.
 
         Defaults:
-            entity_embedding_dim: 50
+            entity_embedding_dim: 128
             norm: 1
-            entity_constrainer: unit_norm
-            relation_constrainer: unit_norm
+            entity_embedding_kwargs: {"param_dtype": jnp.complex64, "embedding_init": "complex_normal"}
+            relation_embedding_kwargs: {"param_dtype": jnp.complex64, "embedding_init": "complex_phases"}
+            relation_constrainer: unit_modulus
 
         :param num_entities: Number of entities in the knowledge graph.
         :type num_entities: int
@@ -73,12 +83,14 @@ class TransE(BaseKGE):
         :type rngs: nnx.Rngs, optional
 
         Reference:
-            Bordes, A., Usunier, N., Garcia-Duran, A., Weston, J., and Yakhnenko, O.
-            "Translating Embeddings for Modeling Multi-relational Data."
-            NeurIPS 2013.
+            Sun, Z., Deng, Z., Nie, J., and Tang, J.
+            "Rotate: Knowledge Graph Embedding by Relational Rotation in Complex Space."
+            ICLR 2019.
         """
-        if entity_constrainer_kwargs is None:
-            entity_constrainer_kwargs = dict(self.DEFAULT_ENTITY_CONSTRAINER_KWARGS)
+        if entity_embedding_kwargs is None:
+            entity_embedding_kwargs = dict(self.DEFAULT_ENTITY_EMBEDDING_KWARGS)
+        if relation_embedding_kwargs is None:
+            relation_embedding_kwargs = dict(self.DEFAULT_RELATION_EMBEDDING_KWARGS)
         if relation_constrainer_kwargs is None:
             relation_constrainer_kwargs = dict(self.DEFAULT_RELATION_CONSTRAINER_KWARGS)
 
@@ -99,11 +111,14 @@ class TransE(BaseKGE):
 
     def interaction_function(self, h: Array, r: Array, t: Array) -> Array:
         """
-        Compute TransE scores for a batch of triples.
+        Compute RotatE scores for a batch of triples.
 
-        The TransE score is the negative distance between h + r and t:
-            score(h, r, t) = -||h + r - t||_p
-        where p is the norm specified by ``norm``.
+        RotatE models relations as rotations in the complex plane: a valid triple (h, r, t) should satisfy h * r ≈ t.
+        The score used during training is the negative p-norm distance between h * r and t:
+            score(h, r, t) = -||h * r - t||_p
+        where p is the norm specified by ``norm``, h, r, t are complex embeddings, and * is elementwise complex
+        multiplication. r is constrained to lie on the unit circle in the complex plane, ensuring it represents a
+        pure rotation.
 
         :param h: Head entity embeddings of shape [B, D].
         :type h: Array
@@ -114,12 +129,12 @@ class TransE(BaseKGE):
         :return: Scores of shape [B], higher is better.
         :rtype: Array
         """
-        score = h + r - t
+        score = h * r - t
         return -jnp.linalg.norm(score, ord=self.norm, axis=-1)
 
 
 if __name__ == "__main__":
     import jax
 
-    model = TransE(num_entities=100, num_relations=10, entity_embedding_dim=32, rngs=nnx.Rngs(0))
+    model = RotatE(num_entities=100, num_relations=10, entity_embedding_dim=32, rngs=nnx.Rngs(0))
     model.score_hrt(jax.numpy.array([[0, 3, 2]]))

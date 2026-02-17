@@ -58,6 +58,34 @@ def test_embedding_init_callable_respected():
     assert not jnp.allclose(weights_uniform, weights_callable)
 
 
+def test_embedding_init_phases_unit_modulus():
+    emb = BaseEmbedding(
+        num_embeddings=10,
+        embedding_dim=4,
+        seed=0,
+        embedding_init="init_phases",
+        param_dtype=jnp.complex64,
+    )
+    weights = _get_embedding_weights(emb)
+    assert jnp.iscomplexobj(weights)
+    assert jnp.allclose(jnp.abs(weights), jnp.ones_like(jnp.abs(weights)), atol=1e-6)
+
+
+def test_embedding_init_phases_requires_complex_dtype():
+    try:
+        BaseEmbedding(
+            num_embeddings=10,
+            embedding_dim=4,
+            seed=0,
+            embedding_init="init_phases",
+            param_dtype=jnp.float32,
+        )
+    except TypeError as exc:
+        assert "requires a complex dtype" in str(exc)
+    else:
+        raise AssertionError("Expected TypeError for init_phases with non-complex dtype")
+
+
 def test_dropout_deterministic_path():
     emb = BaseEmbedding(num_embeddings=10, embedding_dim=4, seed=0, dropout_rate=0.5)
     x = jnp.array([0, 1, 2], dtype=jnp.int32)
