@@ -1,23 +1,21 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import pandas as pd
 from flax import nnx
 
 from kge_jaxed.datasets.base import BaseDataset
 from kge_jaxed.datasets.pykeen_datasets import PyKEENDataset
-from kge_jaxed.evaluation.grouped import (
-    build_filter_map,
-    build_group_maps,
-    score_grouped_pairs,
-)
 from kge_jaxed.evaluation.metrics import compute_metrics_dataframe
-from kge_jaxed.evaluation.validation import validate_eval_df
+from kge_jaxed.evaluation.ranking import (
+    build_eval_filter_maps,
+    evaluate_corruption_side,
+    resolve_eval_dataframe,
+)
 from kge_jaxed.models.base_kge import BaseKGE
 from kge_jaxed.negative_sampling.uniform_negative_sampling import (
     uniform_balanced_sampler,
@@ -408,90 +406,62 @@ class KGEPipeline:
         eval_df: pd.DataFrame | None = None,
         filtered: bool = True,
         eval_batch_size: int | None = None,
+        ks: Sequence[int] = (1, 3, 5, 10),
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Evaluate model using ranking metrics (MRR, MR, Hits@K).
+        Evaluate the model with standard link-prediction ranking metrics.
 
-        This evaluation groups triples by shared (head, relation) and (relation, tail)
-        pairs so each unique pair is scored once against all entities. The resulting
-        score vectors are reused to compute ranks for all true tails/heads in that
-        group, reducing redundant scoring. When filtered=True, known positives are
-        removed from the ranking via precomputed filter maps.
+        The method scores head and tail prediction separately, then reports MRR, MR,
+        and Hits@K for each side plus their average.
 
-        :param split: Which split to evaluate on ('train', 'valid', 'test'); set to None when eval_df is provided
+        :param split: Dataset split to evaluate. Use ``None`` when providing ``eval_df``.
         :type split: str | None
-        :param eval_df: Optional evaluation DataFrame override (mutually exclusive with split)
+        :param eval_df: Optional dataframe of triples with columns ``head``, ``relation``, and ``tail``.
         :type eval_df: pd.DataFrame | None
-        :param filtered: Use filtered evaluation (exclude other known true triples)
+        :param filtered: Whether to exclude other known true triples from the ranking.
         :type filtered: bool
-        :param eval_batch_size: Batch size for grouped evaluation
+        :param eval_batch_size: Batch size used when scoring grouped evaluation queries.
         :type eval_batch_size: int | None
-        :return: Metrics DataFrame and the ranked triples DataFrame
+        :param ks: Hit@K thresholds to report in the metrics dataframe.
+        :type ks: Sequence[int]
+        :return: A tuple ``(metrics_df, ranks_df)`` where ``metrics_df`` contains per-side and average
+            ranking metrics, and ``ranks_df`` contains the evaluated triples with head/tail ranks and scores.
         :rtype: tuple[pd.DataFrame, pd.DataFrame]
         """
-        # Get triples to evaluate on (validate if eval_df is provided, otherwise select by split)
-        if eval_df is None:
-            if split is None:
-                raise ValueError("split must be provided when eval_df is not set")
-            split_map = {
-                "train": self.dataset.train_df,
-                "valid": self.dataset.val_df,
-                "test": self.dataset.test_df,
-            }
-            if split not in split_map:
-                raise ValueError(f"Invalid split: {split}. Expected one of {list(split_map.keys())}.")
-            eval_df = split_map[split]
-        else:
-            if split is not None:
-                raise ValueError("Provide only split or eval_df, not both")
-            validate_eval_df(eval_df, self.dataset.num_entities, self.dataset.num_relations)
-        eval_df = eval_df.reset_index(drop=True)
+        eval_df, split_label = resolve_eval_dataframe(self.dataset, split, eval_df)
+        eval_batch_size = self.dataset.batch_size if eval_batch_size is None else int(eval_batch_size)
+        ks = tuple(int(k) for k in ks)
+        if not ks:
+            raise ValueError("ks must contain at least one value")
+        if any(k <= 0 for k in ks):
+            raise ValueError("ks values must be positive integers")
+        tail_filter_map, head_filter_map = build_eval_filter_maps(self.dataset, filtered)
 
-        if eval_batch_size is None:
-            eval_batch_size = self.dataset.batch_size
-
-        # Build eval groups (unique keys -> row indices + true entities)
-        tail_groups, tail_pairs = build_group_maps(eval_df, ["head", "relation"], "tail")
-        head_groups, head_pairs = build_group_maps(eval_df, ["relation", "tail"], "head")
-
-        # Build filter maps from all triples (for filtered evaluation)
-        tail_filter_map: dict[tuple[int, int], np.ndarray] = {}
-        head_filter_map: dict[tuple[int, int], np.ndarray] = {}
-        if filtered:
-            filter_triples = pd.concat(
-                [self.dataset.train_df, self.dataset.val_df, self.dataset.test_df],
-                ignore_index=True,
-            )
-            tail_filter_map = build_filter_map(filter_triples, ["head", "relation"], "tail")
-            head_filter_map = build_filter_map(filter_triples, ["relation", "tail"], "head")
-
-        # Score all unique pairs and assign ranks to true entities in each group for head and tail corruption
-        tail_ranks, tail_scores = score_grouped_pairs(
+        tail_ranks, tail_scores = evaluate_corruption_side(
             self.model,
-            tail_pairs,
-            tail_groups,
-            tail_filter_map,
-            "tail",
-            self.dataset.num_entities,
-            eval_batch_size,
+            eval_df,
+            group_cols=["head", "relation"],
+            value_col="tail",
+            filter_map=tail_filter_map,
+            corruption_side="tail",
+            num_entities=self.dataset.num_entities,
+            eval_batch_size=eval_batch_size,
         )
-        head_ranks, head_scores = score_grouped_pairs(
+        head_ranks, head_scores = evaluate_corruption_side(
             self.model,
-            head_pairs,
-            head_groups,
-            head_filter_map,
-            "head",
-            self.dataset.num_entities,
-            eval_batch_size,
+            eval_df,
+            group_cols=["relation", "tail"],
+            value_col="head",
+            filter_map=head_filter_map,
+            corruption_side="head",
+            num_entities=self.dataset.num_entities,
+            eval_batch_size=eval_batch_size,
         )
 
-        # Compute metrics from ranks (per side + average)
-        metrics_df = compute_metrics_dataframe(head_ranks, tail_ranks)
-
-        print(f"\nRanking Results ({split} set, both corruption):")
+        metrics_df = compute_metrics_dataframe(head_ranks, tail_ranks, ks=ks)
+        print(f"\nRanking Results ({split_label} set, both corruption):")
         print(metrics_df)
 
-        # Create a DataFrame with ranks and scores for all evaluated triples
         ranks_df = eval_df.copy()
         ranks_df["rank_head"] = head_ranks
         ranks_df["rank_tail"] = tail_ranks
