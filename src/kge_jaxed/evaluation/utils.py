@@ -1,4 +1,4 @@
-"""Ranking-based evaluation metrics for KGE models."""
+"""Utilities for ranking-based KGE evaluation."""
 
 from functools import partial
 from typing import Literal
@@ -6,6 +6,7 @@ from typing import Literal
 import jax
 import jax.numpy as jnp
 import numpy as np
+from numpy.typing import NDArray
 
 
 @partial(jax.jit, static_argnames=("num_entities", "corruption_side"))
@@ -53,10 +54,10 @@ def score_all_entities_batch(
 
 
 def compute_group_ranks(
-    all_scores: jnp.ndarray,
-    target_ids: np.ndarray,
-    filtered_ids: np.ndarray | None = None,
-) -> np.ndarray:
+    all_scores: jnp.ndarray | NDArray[np.floating],
+    target_ids: NDArray[np.integer],
+    filtered_ids: NDArray[np.integer] | None = None,
+) -> NDArray[np.int32]:
     """
     Compute ranks for multiple true entities sharing the same score vector.
 
@@ -69,16 +70,20 @@ def compute_group_ranks(
     :return: Ranks for each true entity [K]
     :rtype: np.ndarray
     """
-    # Compute how many entities have a higher score than each target entity
-    target_scores = all_scores[jnp.asarray(target_ids, dtype=jnp.int32)]
-    higher_counts = jnp.sum(all_scores[None, :] > target_scores[:, None], axis=1)
+    all_scores = np.asarray(all_scores, dtype=np.float32)
+    target_ids = np.asarray(target_ids, dtype=np.int32)
+    target_scores = all_scores[target_ids]
 
-    # If filtered_ids are provided, compute how many of those have a higher score than each target entity
-    if filtered_ids is not None and filtered_ids.size > 0:
-        filtered_scores = all_scores[jnp.asarray(filtered_ids, dtype=jnp.int32)]
-        higher_filtered_counts = jnp.sum(filtered_scores[None, :] > target_scores[:, None], axis=1)
-    else:
-        higher_filtered_counts = 0
+    # Standard optimistic rank: count candidates with strictly higher score.
+    higher_counts = np.sum(all_scores[None, :] > target_scores[:, None], axis=1)
 
-    target_ranks = higher_counts + 1 - higher_filtered_counts
-    return np.array(jnp.maximum(target_ranks, 1))  # Ensure ranks are at least 1
+    # Filtered evaluation removes other known positives for the same query. We keep
+    # the current target implicitly because it is never strictly higher than itself.
+    if filtered_ids is None or filtered_ids.size == 0:
+        return higher_counts.astype(np.int32) + 1
+
+    filtered_ids = np.unique(np.asarray(filtered_ids, dtype=np.int32))
+    filtered_scores = all_scores[filtered_ids]
+    filtered_higher_counts = np.sum(filtered_scores[None, :] > target_scores[:, None], axis=1)
+
+    return np.maximum(higher_counts - filtered_higher_counts + 1, 1).astype(np.int32)

@@ -5,6 +5,7 @@ import pytest
 import kge_jaxed.pipeline as pipeline_module
 from kge_jaxed.datasets.base import BaseDataset
 from kge_jaxed.loss_functions.losses import self_adversarial_negative_sampling_loss
+from kge_jaxed.models.distmult import DistMult
 from kge_jaxed.models.transe import TransE
 from kge_jaxed.pipeline import KGEPipeline
 from kge_jaxed.rngs import make_model_rngs
@@ -16,6 +17,19 @@ class DummyDataset(BaseDataset):
         self.train_df = pd.DataFrame([(0, 0, 1)], columns=["head", "relation", "tail"]).astype("int32")
         self.val_df = pd.DataFrame([(1, 0, 2)], columns=["head", "relation", "tail"]).astype("int32")
         self.test_df = pd.DataFrame([(2, 0, 3)], columns=["head", "relation", "tail"]).astype("int32")
+        self.num_entities = 4
+        self.num_relations = 1
+
+    def load_data(self) -> None:
+        return None
+
+
+class EvaluationDataset(BaseDataset):
+    def __init__(self) -> None:
+        super().__init__(batch_size=2, shuffle=False, seed=0)
+        self.train_df = pd.DataFrame([(0, 0, 0), (2, 0, 1)], columns=["head", "relation", "tail"]).astype("int32")
+        self.val_df = pd.DataFrame(columns=["head", "relation", "tail"]).astype("int32")
+        self.test_df = pd.DataFrame([(0, 0, 1)], columns=["head", "relation", "tail"]).astype("int32")
         self.num_entities = 4
         self.num_relations = 1
 
@@ -172,3 +186,59 @@ def test_pipeline_accepts_nssa_loss_kwargs():
         margin=9.0,
     )
     assert actual == pytest.approx(float(expected))
+
+
+def test_pipeline_evaluate_returns_filtered_ranks_for_known_positives() -> None:
+    dataset = EvaluationDataset()
+    model = DistMult(
+        num_entities=dataset.num_entities,
+        num_relations=dataset.num_relations,
+        entity_embedding_dim=1,
+        entity_constrainer_kwargs={},
+        relation_regularizer_kwargs={},
+        rngs=make_model_rngs(0),
+    )
+    model.entity_embedding.emb.embedding.set_value(jnp.array([[1.0], [0.8], [0.4], [0.2]], dtype=jnp.float32))
+    model.relation_embedding.emb.embedding.set_value(jnp.array([[1.0]], dtype=jnp.float32))
+
+    pipeline = KGEPipeline(
+        model=model,
+        loss_name="mrl",
+        dataset=dataset,
+    )
+
+    filtered_metrics, filtered_ranks = pipeline.evaluate(split="test", filtered=True)
+    unfiltered_metrics, unfiltered_ranks = pipeline.evaluate(split="test", filtered=False)
+
+    assert int(filtered_ranks.loc[0, "rank_tail"]) == 1
+    assert int(unfiltered_ranks.loc[0, "rank_tail"]) == 2
+    assert int(filtered_ranks.loc[0, "rank_head"]) == 1
+    assert float(filtered_metrics.loc["mrr", "avg"]) == pytest.approx(1.0)
+    assert float(unfiltered_metrics.loc["mrr", "avg"]) == pytest.approx(0.75)
+
+
+def test_pipeline_evaluate_accepts_custom_hits_at_values() -> None:
+    dataset = EvaluationDataset()
+    model = DistMult(
+        num_entities=dataset.num_entities,
+        num_relations=dataset.num_relations,
+        entity_embedding_dim=1,
+        entity_constrainer_kwargs={},
+        relation_regularizer_kwargs={},
+        rngs=make_model_rngs(0),
+    )
+    model.entity_embedding.emb.embedding.set_value(jnp.array([[1.0], [0.8], [0.4], [0.2]], dtype=jnp.float32))
+    model.relation_embedding.emb.embedding.set_value(jnp.array([[1.0]], dtype=jnp.float32))
+
+    pipeline = KGEPipeline(
+        model=model,
+        loss_name="mrl",
+        dataset=dataset,
+    )
+
+    metrics_df, _ = pipeline.evaluate(split="test", filtered=False, ks=(2, 4))
+
+    assert "hits@2" in metrics_df.index
+    assert "hits@4" in metrics_df.index
+    assert "hits@1" not in metrics_df.index
+    assert float(metrics_df.loc["hits@2", "avg"]) == pytest.approx(1.0)
