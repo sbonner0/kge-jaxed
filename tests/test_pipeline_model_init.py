@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import pandas as pd
 import pytest
 
-import kge_jaxed.pipeline as pipeline_module
+import kge_jaxed.training.setup_training as training_setup
 from kge_jaxed.datasets.base import BaseDataset
 from kge_jaxed.loss_functions.losses import self_adversarial_negative_sampling_loss
 from kge_jaxed.models.distmult import DistMult
@@ -132,7 +132,7 @@ def test_pipeline_forwards_dataset_kwargs_for_dataset_name(monkeypatch):
             self.shuffle = shuffle
             self.seed = seed
 
-    monkeypatch.setattr(pipeline_module, "PyKEENDataset", StubPyKEENDataset)
+    monkeypatch.setattr(training_setup, "PyKEENDataset", StubPyKEENDataset)
 
     pipeline = KGEPipeline(
         model="transe",

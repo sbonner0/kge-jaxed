@@ -1,15 +1,14 @@
-from collections.abc import Callable, Sequence
-from functools import partial
+"""Public training pipeline for KGE models."""
+
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-import jax
 import jax.numpy as jnp
-import pandas as pd
+import pandas as pd  # type: ignore[import]
 from flax import nnx
 
 from kge_jaxed.datasets.base import BaseDataset
-from kge_jaxed.datasets.pykeen_datasets import PyKEENDataset
 from kge_jaxed.evaluation.metrics import compute_metrics_dataframe
 from kge_jaxed.evaluation.ranking import (
     build_eval_filter_maps,
@@ -17,115 +16,26 @@ from kge_jaxed.evaluation.ranking import (
     resolve_eval_dataframe,
 )
 from kge_jaxed.models.base_kge import BaseKGE
-from kge_jaxed.negative_sampling.uniform_negative_sampling import (
-    uniform_balanced_sampler,
-)
-from kge_jaxed.registries import get_loss, get_model, get_optimizer
+from kge_jaxed.registries import get_loss
 from kge_jaxed.rngs import RngManager
 from kge_jaxed.training import checkpointing as ckpt
-
-# ----------------------------- #
-# JIT-friendly step function   #
-# ----------------------------- #
-
-
-def _score_pos_neg(
-    model: BaseKGE,
-    pos_batch: jnp.ndarray,
-    neg_batch: jnp.ndarray,
-    *,
-    dropout_rngs: nnx.Rngs | None = None,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
-    if dropout_rngs is None:
-        pos_scores = model.score_hrt(pos_batch)
-    else:
-        pos_scores = model.score_hrt(pos_batch, dropout_rngs=dropout_rngs)
-    neg_flat = neg_batch.reshape(-1, 3)
-    if dropout_rngs is None:
-        neg_scores = model.score_hrt(neg_flat)
-    else:
-        neg_scores = model.score_hrt(neg_flat, dropout_rngs=dropout_rngs)
-    neg_scores = neg_scores.reshape(neg_batch.shape[0], neg_batch.shape[1])
-    return pos_scores, neg_scores
-
-
-@partial(
-    nnx.jit,
-    static_argnames=(
-        "num_negative_samples",
-        "num_entities",
-        "loss_fn",
-    ),
+from kge_jaxed.training.setup_training import (
+    build_checkpoint_metadata,
+    build_optimizer,
+    resolve_dataset,
+    resolve_model,
 )
-def train_step_fn(
-    model: BaseKGE,
-    optimizer: nnx.Optimizer,
-    step_key: jax.Array,
-    batch: jnp.ndarray,
-    num_negative_samples: int,
-    num_entities: int,
-    loss_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray],
-) -> jnp.ndarray:
-    """
-    A JIT-optimised function to take a training step for KGE model. This function
-    generates negative samples, computes the loss, and updates model parameters.
-
-    :param model: KGE model
-    :type model: nnx.Module
-    :param optimizer: Optimizer bound to model parameters
-    :type optimizer: nnx.Optimizer
-    :param step_key: JAX random key for this training step
-    :type step_key: jax.Array
-    :param batch: Input batch of positive triples
-    :type batch: jnp.ndarray
-    :param num_negative_samples: Number of negative samples per positive
-    :type num_negative_samples: int
-    :param num_entities: Total number of entities in the knowledge graph
-    :type num_entities: int
-    :param loss_fn: Loss function that consumes (pos_scores, neg_scores). The
-        score convention is ``higher is better`` for both arrays.
-    :type loss_fn: Callable[[jnp.ndarray, jnp.ndarray], jnp.ndarray]
-    :return: Computed loss value
-    :rtype: jnp.ndarray
-    """
-
-    def loss_on_model(m: BaseKGE) -> jnp.ndarray:
-        use_dropout = bool(getattr(m, "uses_dropout", False))
-        if use_dropout:
-            neg_key, dropout_key = jax.random.split(step_key, 2)
-            dropout_rngs = nnx.Rngs(dropout=dropout_key)
-        else:
-            neg_key = step_key
-            dropout_rngs = None
-
-        # Generate negative samples
-        neg = uniform_balanced_sampler(
-            triples=batch,
-            num_entities=num_entities,
-            k=num_negative_samples,
-            key=neg_key,
-        )
-        # Compute scores and loss
-        pos_scores, neg_scores = _score_pos_neg(m, batch, neg, dropout_rngs=dropout_rngs)
-        loss = loss_fn(pos_scores, neg_scores)
-
-        # Add regularization loss if applicable
-        loss = loss + m.regularization_loss()
-
-        return loss
-
-    loss, grads = nnx.value_and_grad(loss_on_model)(model)
-    optimizer.update(model, grads)
-    model.apply_constraints()
-
-    return loss
+from kge_jaxed.training.steps import train_step_fn
 
 
-# ----------------------------- #
-# Pipeline class                #
-# ----------------------------- #
 class KGEPipeline:
-    """Simple pipeline for training Knowledge Graph Embedding models (JAX + Flax NNX)."""
+    """
+    Pipeline for training and evaluating Knowledge Graph Embedding models.
+
+    The pipeline owns the dataset, model, optimizer, RNG manager, and resumable training state.
+    It provides a small high-level API for training, evaluation, and checkpointing while delegating model construction
+    and the JIT-compiled training step to lower-level helpers.
+    """
 
     def __init__(
         self,
@@ -142,114 +52,101 @@ class KGEPipeline:
         seed: int = 42,
         loss_kwargs: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the KGE training pipeline."""
+        """
+        Initialize the KGE training pipeline.
+
+        ``model`` and ``dataset`` can each be provided either as prebuilt  instances or as string identifiers that are
+        resolved by the library. The resulting pipeline keeps enough configuration state to rebuild optimizer
+        state around checkpoints and to validate that a loaded checkpoint is compatible with the current setup.
+
+        :param model: Model name to resolve from the registry, or a prebuilt
+            ``BaseKGE`` instance.
+        :type model: str | BaseKGE
+        :param dataset: Dataset name to resolve through ``PyKEENDataset``, or a
+            prebuilt ``BaseDataset`` instance.
+        :type dataset: str | BaseDataset
+        :param loss_name: Registered loss name used to create ``self.loss_fn``.
+        :type loss_name: str
+        :param model_kwargs: Keyword arguments forwarded when ``model`` is given
+            as a string name.
+        :type model_kwargs: dict[str, Any] | None, optional
+        :param dataset_kwargs: Keyword arguments forwarded when ``dataset`` is
+            given as a string name.
+        :type dataset_kwargs: dict[str, Any] | None, optional
+        :param embedding_dim: Entity embedding dimension used when constructing a
+            model from a string name.
+        :type embedding_dim: int, optional
+        :param negative_samples: Number of negative samples to generate per
+            positive triple during training.
+        :type negative_samples: int, optional
+        :param learning_rate: Optimizer learning rate.
+        :type learning_rate: float, optional
+        :param optimizer_name: Registered optimizer name used to build the NNX
+            optimizer wrapper.
+        :type optimizer_name: str, optional
+        :param optimizer_kwargs: Extra keyword arguments forwarded to the
+            optimizer factory.
+        :type optimizer_kwargs: dict[str, Any] | None, optional
+        :param seed: Base random seed used for model initialization and per-step
+            training RNGs.
+        :type seed: int, optional
+        :param loss_kwargs: Extra keyword arguments forwarded when constructing
+            the configured loss function.
+        :type loss_kwargs: dict[str, Any] | None, optional
+        """
 
         model_kwargs = {} if model_kwargs is None else dict(model_kwargs)
         dataset_kwargs = {} if dataset_kwargs is None else dict(dataset_kwargs)
         loss_kwargs = {} if loss_kwargs is None else dict(loss_kwargs)
+
         self.negative_samples = int(negative_samples)
         self.learning_rate = float(learning_rate)
         self.optimizer_name = str(optimizer_name)
         self.optimizer_kwargs = {} if optimizer_kwargs is None else dict(optimizer_kwargs)
         self.seed = int(seed)
+        self.loss_name = str(loss_name)
         self.loss_kwargs = loss_kwargs
 
-        # Training state (checkpoint-resumable)
         self.epoch = 0
         self.global_step = 0
 
-        self.dataset, self.dataset_name = self._resolve_dataset(dataset, dataset_kwargs)
-
-        # Loss from registry
-        self.loss_fn = get_loss(loss_name, **self.loss_kwargs)
-
+        self.dataset, self.dataset_name = resolve_dataset(dataset, dataset_kwargs, seed=self.seed)
+        self.loss_fn = get_loss(self.loss_name, **self.loss_kwargs)
         self.rng_manager = RngManager(self.seed)
-
-        self.model, self.model_name, self.embedding_dim, self.model_kwargs = self._resolve_model(
-            model=model,
-            model_kwargs=model_kwargs,
-            embedding_dim=embedding_dim,
+        self.model, self.model_name, self.embedding_dim, self.model_kwargs = resolve_model(
+            model,
+            model_kwargs,
+            embedding_dim,
+            dataset=self.dataset,
+            rng_manager=self.rng_manager,
+        )
+        self.optimizer = build_optimizer(
+            self.model,
+            optimizer_name=self.optimizer_name,
+            learning_rate=self.learning_rate,
+            optimizer_kwargs=self.optimizer_kwargs,
         )
 
-        # Optimizer bound to NNX params
-        self.optimizer = self._build_optimizer(self.model)
-
-    def _resolve_dataset(self, dataset: str | BaseDataset, dataset_kwargs: dict[str, Any]) -> tuple[BaseDataset, str]:
-        if isinstance(dataset, str):
-            resolved_dataset_kwargs = dict(dataset_kwargs)
-            resolved_dataset_kwargs.setdefault("seed", self.seed)
-            resolved_dataset = PyKEENDataset(
-                dataset_name=dataset,
-                **resolved_dataset_kwargs,
-            )
-            return resolved_dataset, dataset
-        if isinstance(dataset, BaseDataset):
-            if dataset_kwargs:
-                raise ValueError("dataset_kwargs is only supported when dataset is a string name")
-            dataset_name = getattr(dataset, "dataset_name", "custom_dataset")
-            return dataset, dataset_name
-        raise TypeError("dataset must be a dataset name string or BaseDataset instance")
-
-    def _resolve_model(
-        self,
-        model: str | BaseKGE,
-        model_kwargs: dict[str, Any],
-        embedding_dim: int,
-    ) -> tuple[BaseKGE, str, int, dict[str, Any]]:
-        if isinstance(model, str):
-            model_name = model
-            resolved_embedding_dim = int(embedding_dim)
-            model_cls = get_model(model_name)
-            resolved_model = model_cls(
-                num_entities=self.dataset.num_entities,
-                num_relations=self.dataset.num_relations,
-                entity_embedding_dim=resolved_embedding_dim,
-                rngs=self.rng_manager.init_rngs(),
-                **model_kwargs,
-            )
-            return resolved_model, model_name, resolved_embedding_dim, model_kwargs
-
-        if isinstance(model, BaseKGE):
-            if model_kwargs:
-                raise ValueError("model_kwargs is only supported when model is a string name")
-            if getattr(model, "num_entities", self.dataset.num_entities) != self.dataset.num_entities:
-                raise ValueError("Provided model num_entities does not match dataset.num_entities")
-            if getattr(model, "num_relations", self.dataset.num_relations) != self.dataset.num_relations:
-                raise ValueError("Provided model num_relations does not match dataset.num_relations")
-            model_name = model.__class__.__name__.lower()
-            resolved_embedding_dim = int(getattr(model, "entity_embedding_dim", embedding_dim))
-            return model, model_name, resolved_embedding_dim, {}
-
-        raise TypeError("model must be either a model name string or a BaseKGE instance")
-
-    def _build_optimizer(self, model: BaseKGE) -> nnx.Optimizer:
-        optimizer_factory = get_optimizer(self.optimizer_name)
-        optimizer_transform = optimizer_factory(self.learning_rate, **self.optimizer_kwargs)
-        return nnx.Optimizer(model, optimizer_transform, wrt=nnx.Param)
-
-    # -------- RNG helpers -------- #
-
-    def _make_step_key(self, step: int, phase: int = 0) -> jax.Array:
-        """
-        Generate a JAX key for a specific step.
-        phase=0 → train; phase=1 → eval (keeps streams disjoint).
-        """
-        return self.rng_manager.step_key(step, phase=phase)
-
-    # -------- Checkpointing -------- #
-
     def _checkpoint_metadata(self) -> dict[str, Any]:
-        return {
-            "model_name": self.model_name,
-            "embedding_dim": self.embedding_dim,
-            "model_kwargs": self.model_kwargs,
-            "dataset_name": self.dataset_name,
-            "num_entities": self.dataset.num_entities,
-            "num_relations": self.dataset.num_relations,
-            "learning_rate": self.learning_rate,
-            "optimizer_name": self.optimizer_name,
-            "optimizer_kwargs": self.optimizer_kwargs,
-        }
+        """
+        Build the configuration metadata stored alongside checkpoints.
+
+        This metadata is used on load to verify that the current pipeline is compatible with the saved checkpoint, while
+        still allowing selected optimizer hyperparameters to produce warnings instead of hard failures.
+        """
+        return build_checkpoint_metadata(
+            model_name=self.model_name,
+            embedding_dim=self.embedding_dim,
+            model_kwargs=self.model_kwargs,
+            dataset=self.dataset,
+            dataset_name=self.dataset_name,
+            learning_rate=self.learning_rate,
+            optimizer_name=self.optimizer_name,
+            optimizer_kwargs=self.optimizer_kwargs,
+            loss_name=self.loss_name,
+            loss_kwargs=self.loss_kwargs,
+            negative_samples=self.negative_samples,
+        )
 
     def save_checkpoint(
         self,
@@ -259,14 +156,21 @@ class KGEPipeline:
         global_step: int | None = None,
     ) -> None:
         """
-        Save model parameters and optimizer state to an Orbax checkpoint directory.
+        Save model parameters, optimizer state, and pipeline metadata.
+
+        The checkpoint contains both the Orbax model/optimizer state and a JSON metadata file describing the pipeline
+        configuration. When provided,``epoch`` and ``global_step`` are persisted into that metadata so a later call to
+        ``load_checkpoint()`` can resume training progress counters.
 
         :param checkpoint_path: Target checkpoint directory.
         :type checkpoint_path: str
-        :param epoch: Optional current epoch to store in metadata.
+        :param epoch: Optional epoch value to write into checkpoint metadata.
         :type epoch: int | None
-        :param global_step: Optional global step to store in metadata.
+        :param global_step: Optional global training step to write into
+            checkpoint metadata.
         :type global_step: int | None
+        :return: None
+        :rtype: None
         """
         metadata = self._checkpoint_metadata()
         if epoch is not None:
@@ -282,16 +186,25 @@ class KGEPipeline:
 
     def load_checkpoint(self, checkpoint_path: str) -> dict[str, Any] | None:
         """
-        Restore model parameters and optimizer state from an Orbax checkpoint directory.
+        Restore model parameters, optimizer state, and resumable counters.
+
+        Checkpoint metadata is validated against the current pipeline configuration before state is restored.
+        If metadata is present, ``self.epoch`` and ``self.global_step`` are updated from the stored values so
+        subsequent calls to ``train()`` resume from the checkpoint.
 
         :param checkpoint_path: Source checkpoint directory.
         :type checkpoint_path: str
-        :return: Stored metadata dict when present; otherwise None.
+        :return: The stored checkpoint metadata when present, otherwise ``None``.
         :rtype: dict[str, Any] | None
         """
 
         def rebuild_optimizer(model: BaseKGE) -> nnx.Optimizer:
-            return self._build_optimizer(model)
+            return build_optimizer(
+                model,
+                optimizer_name=self.optimizer_name,
+                learning_rate=self.learning_rate,
+                optimizer_kwargs=self.optimizer_kwargs,
+            )
 
         self.model, self.optimizer, metadata = ckpt.load_checkpoint(
             checkpoint_path,
@@ -306,8 +219,6 @@ class KGEPipeline:
             self.global_step = int(metadata.get("global_step", 0))
         return metadata
 
-    # -------- Training / eval loops -------- #
-
     def train(
         self,
         epochs: int = 100,
@@ -317,25 +228,26 @@ class KGEPipeline:
         save_every: int | None = None,
     ) -> dict[str, Any]:
         """
-        Run the training loop for a fixed number of epochs.
+        Train the model for a fixed number of additional epochs.
 
-        This loop uses deterministic RNGs derived from (seed, process, phase=0, global_step).
-        It optionally saves checkpoints during training and always saves a final checkpoint
-        when ``save_checkpoint_dir`` is provided. Saved checkpoints include the current
-        epoch and global step in metadata. If a checkpoint was loaded, training resumes
-        from the stored epoch and global step.
+        Training resumes from the pipeline's current ``epoch`` and ``global_step`` counters, so a pipeline that has
+        loaded a checkpoint continues from the restored state rather than starting from zero again. Each training batch
+        is converted to a JAX array, scored via the JIT-compiled training step, and aggregated into a mean loss for the
+        epoch. When checkpointing is enabled, an intermediate checkpoint can be written every ``save_every`` epochs and
+        a final checkpoint is always written at the end of training.
 
-        :param epochs: Number of epochs to train for.
+        :param epochs: Number of additional epochs to run.
         :type epochs: int
-        :param log_every: Print loss every N epochs.
+        :param log_every: Print the average epoch loss every N epochs.
         :type log_every: int
-        :param save_checkpoint_dir: Directory to save checkpoints. If set, the checkpoint is overwritten
-            in this directory.
+        :param save_checkpoint_dir: Optional checkpoint directory. If provided,
+            the same directory is overwritten on each save.
         :type save_checkpoint_dir: str | None
-        :param save_every: Save every N epochs. Requires ``save_checkpoint_dir`` to be set.
-            When provided, the same directory is overwritten each time.
+        :param save_every: Optional checkpoint cadence in epochs. Requires
+            ``save_checkpoint_dir`` to be set.
         :type save_every: int | None
-        :return: Training summary including per-epoch loss and the RNG seed.
+        :return: Dictionary containing the mean loss for each completed epoch in
+            ``train_losses`` and the pipeline RNG ``seed`` used for the run.
         :rtype: dict[str, Any]
         """
         if log_every <= 0:
@@ -347,39 +259,32 @@ class KGEPipeline:
 
         checkpoint_path = Path(save_checkpoint_dir) if save_checkpoint_dir is not None else None
         train_losses: list[float] = []
+        epochs = int(epochs)
         start_epoch = int(self.epoch)
         global_step = int(self.global_step)
 
         print(f"Starting training for {epochs} epochs (resume from epoch {start_epoch})...")
 
-        # Training loop over epochs
-        for epoch in range(start_epoch, start_epoch + int(epochs)):
+        for epoch in range(start_epoch, start_epoch + epochs):
             epoch_losses = []
 
-            # Loop over training batches
             for batch in self.dataset.iter_batches("train"):
-                batch = jnp.array(batch)
-
-                # Generate key for this step
-                step_key = self._make_step_key(global_step, phase=0)
-
-                # JITed train step
+                batch_array = jnp.asarray(batch)
+                step_key = self.rng_manager.step_key(global_step, phase=0)
                 loss = train_step_fn(
                     self.model,
                     self.optimizer,
                     step_key,
-                    batch,
+                    batch_array,
                     self.negative_samples,
                     self.dataset.num_entities,
                     self.loss_fn,
                 )  # type: ignore[call-arg]
-
-                loss_value = float(jnp.asarray(loss))
-                epoch_losses.append(loss_value)
+                epoch_losses.append(float(jnp.asarray(loss)))
                 global_step += 1
 
             if epoch_losses:
-                avg_loss = float(jnp.mean(jnp.array(epoch_losses)))
+                avg_loss = float(jnp.mean(jnp.asarray(epoch_losses)))
                 train_losses.append(avg_loss)
             else:
                 avg_loss = float("nan")
@@ -411,21 +316,31 @@ class KGEPipeline:
         """
         Evaluate the model with standard link-prediction ranking metrics.
 
-        The method scores head and tail prediction separately, then reports MRR, MR,
-        and Hits@K for each side plus their average.
+        Evaluation scores both tail prediction and head prediction, computes ranks for each query,
+        and then summarizes those ranks as MR, MRR, and Hits@K. You can evaluate one of the built-in dataset splits
+        (``"train"``, ``"valid"``, or ``"test"``) or provide a custom dataframe of triples through ``eval_df``.
+        In filtered mode, other known positive triples from the dataset are removed from the candidate rankings before
+        ranks are computed.
 
-        :param split: Dataset split to evaluate. Use ``None`` when providing ``eval_df``.
+        :param split: Dataset split to evaluate when ``eval_df`` is not
+            provided.
         :type split: str | None
-        :param eval_df: Optional dataframe of triples with columns ``head``, ``relation``, and ``tail``.
+        :param eval_df: Optional dataframe of triples with columns ``head``,
+            ``relation``, and ``tail``. When this is provided, ``split`` must be
+            ``None``.
         :type eval_df: pd.DataFrame | None
-        :param filtered: Whether to exclude other known true triples from the ranking.
+        :param filtered: Whether to exclude other known true triples from the
+            ranking candidates.
         :type filtered: bool
-        :param eval_batch_size: Batch size used when scoring grouped evaluation queries.
+        :param eval_batch_size: Number of grouped evaluation queries to score at
+            once. Defaults to ``dataset.batch_size``.
         :type eval_batch_size: int | None
-        :param ks: Hit@K thresholds to report in the metrics dataframe.
+        :param ks: Positive Hit@K thresholds to include in the metrics table.
         :type ks: Sequence[int]
-        :return: A tuple ``(metrics_df, ranks_df)`` where ``metrics_df`` contains per-side and average
-            ranking metrics, and ``ranks_df`` contains the evaluated triples with head/tail ranks and scores.
+        :return: Tuple ``(metrics_df, ranks_df)`` where ``metrics_df`` is indexed
+            by metric with columns ``head``, ``tail``, and ``avg``, and
+            ``ranks_df`` contains the evaluated triples plus ``rank_head``,
+            ``rank_tail``, ``score_head``, and ``score_tail``.
         :rtype: tuple[pd.DataFrame, pd.DataFrame]
         """
         eval_df, split_label = resolve_eval_dataframe(self.dataset, split, eval_df)
@@ -435,6 +350,7 @@ class KGEPipeline:
             raise ValueError("ks must contain at least one value")
         if any(k <= 0 for k in ks):
             raise ValueError("ks values must be positive integers")
+
         tail_filter_map, head_filter_map = build_eval_filter_maps(self.dataset, filtered)
 
         tail_ranks, tail_scores = evaluate_corruption_side(
@@ -459,13 +375,12 @@ class KGEPipeline:
         )
 
         metrics_df = compute_metrics_dataframe(head_ranks, tail_ranks, ks=ks)
-        print(f"\nRanking Results ({split_label} set, both corruption):")
-        print(metrics_df)
-
         ranks_df = eval_df.copy()
         ranks_df["rank_head"] = head_ranks
         ranks_df["rank_tail"] = tail_ranks
         ranks_df["score_head"] = head_scores
         ranks_df["score_tail"] = tail_scores
 
+        print(f"\nRanking Results ({split_label} set, both corruption):")
+        print(metrics_df)
         return metrics_df, ranks_df
