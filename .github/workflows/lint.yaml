@@ -1,4 +1,4 @@
-name: Lint with uv
+name: Lint
 
 on:
   push:

@@ -6,7 +6,7 @@ import json
 import warnings
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 import jax
 from flax import nnx
@@ -106,10 +106,7 @@ def save_checkpoint(
     _write_metadata(checkpoint_path, metadata)
 
 
-TModel = TypeVar("TModel", bound=nnx.Module)
-
-
-def load_checkpoint(
+def load_checkpoint[TModel: nnx.Module](
     checkpoint_path: str,
     *,
     model: TModel,
