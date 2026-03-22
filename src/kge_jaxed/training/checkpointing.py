@@ -16,9 +16,36 @@ from orbax import checkpoint as ocp
 def _abstract_pure_dict(state: nnx.State) -> dict[str, Any]:
     pure = nnx.to_pure_dict(state)
     return jax.tree_util.tree_map(
-        lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype),
+        lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=getattr(x, "sharding", None)),
         pure,
     )
+
+
+def _restore_args_from_pure_dict(state: nnx.State) -> dict[str, Any]:
+    pure = nnx.to_pure_dict(state)
+
+    def make_restore_arg(x: Any) -> ocp.RestoreArgs:
+        if isinstance(x, jax.Array):
+            if type(x).__name__ == "PRNGKeyArray":
+                storage_shape = jax.random.key_data(x).shape
+                return ocp.ArrayRestoreArgs(
+                    restore_type=type(x),
+                    dtype=x.dtype,
+                    sharding=x.sharding,
+                    global_shape=storage_shape,
+                    shape=storage_shape,
+                    strict=False,
+                )
+            return ocp.ArrayRestoreArgs(
+                restore_type=jax.Array,
+                dtype=x.dtype,
+                sharding=x.sharding,
+                global_shape=x.shape,
+                shape=x.shape,
+            )
+        return ocp.RestoreArgs(restore_type=type(x), dtype=getattr(x, "dtype", None))
+
+    return jax.tree_util.tree_map(make_restore_arg, pure)
 
 
 def _write_metadata(checkpoint_path: str, metadata: dict[str, Any]) -> None:
@@ -104,12 +131,17 @@ def load_checkpoint(
     checkpointer = ocp.PyTreeCheckpointer()
     graphdef, state = nnx.split(model)
     abstract_state = _abstract_pure_dict(state)
+    restore_args_state = _restore_args_from_pure_dict(state)
     opt_state = nnx.state(optimizer, nnx.OptState)
     abstract_opt_state = _abstract_pure_dict(opt_state)
+    restore_args_opt_state = _restore_args_from_pure_dict(opt_state)
 
     restored = checkpointer.restore(
         checkpoint_path,
-        {"model": abstract_state, "optimizer": abstract_opt_state},
+        ocp.args.PyTreeRestore(
+            item={"model": abstract_state, "optimizer": abstract_opt_state},
+            restore_args={"model": restore_args_state, "optimizer": restore_args_opt_state},
+        ),
     )
     restored_state = nnx.restore_int_paths(restored["model"])
     restored_opt_state = nnx.restore_int_paths(restored["optimizer"])
@@ -117,7 +149,8 @@ def load_checkpoint(
     nnx.replace_by_pure_dict(state, restored_state)
     model = nnx.merge(graphdef, state)
     optimizer = rebuild_optimizer(model)
-    new_opt_state = nnx.state(optimizer, nnx.OptState)
-    nnx.replace_by_pure_dict(new_opt_state, restored_opt_state)
+    optimizer_state = nnx.state(optimizer, nnx.OptState)
+    nnx.replace_by_pure_dict(optimizer_state, restored_opt_state)
+    nnx.update(optimizer, optimizer_state)
 
     return model, optimizer, metadata
