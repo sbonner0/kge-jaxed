@@ -35,6 +35,16 @@ def _score_pos_neg(
     return pos_scores, neg_scores
 
 
+def _touched_ids(
+    pos_batch: jnp.ndarray,
+    neg_batch: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    neg_flat = neg_batch.reshape(-1, 3)
+    entity_ids = jnp.concatenate([pos_batch[:, 0], pos_batch[:, 2], neg_flat[:, 0], neg_flat[:, 2]])
+    relation_ids = pos_batch[:, 1]
+    return entity_ids, relation_ids
+
+
 @partial(
     nnx.jit,
     static_argnames=(
@@ -70,8 +80,9 @@ def train_step_fn(
             key=neg_key,
         )
         pos_scores, neg_scores = _score_pos_neg(m, batch, neg, dropout_rngs=dropout_rngs)
+        entity_ids, relation_ids = _touched_ids(batch, neg)
         loss = loss_fn(pos_scores, neg_scores)
-        return loss + m.regularization_loss()
+        return loss + m.regularization_loss_for_ids(entity_ids, relation_ids)
 
     loss, grads = nnx.value_and_grad(loss_on_model)(model)
     optimizer.update(model, grads)

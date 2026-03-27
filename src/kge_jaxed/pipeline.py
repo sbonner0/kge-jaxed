@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import jax
 import jax.numpy as jnp
 import pandas as pd  # type: ignore[import]
 from flax import nnx
@@ -266,9 +267,10 @@ class KGEPipeline:
         print(f"Starting training for {epochs} epochs (resume from epoch {start_epoch})...")
 
         for epoch in range(start_epoch, start_epoch + epochs):
-            epoch_losses = []
+            loss_sum = jnp.array(0.0)
+            num_batches = 0
 
-            for batch in self.dataset.iter_batches("train"):
+            for batch in self.dataset.iter_batches("train", shuffle=True, seed=self.seed + epoch):
                 batch_array = jnp.asarray(batch)
                 step_key = self.rng_manager.step_key(global_step, phase=0)
                 loss = train_step_fn(
@@ -280,11 +282,12 @@ class KGEPipeline:
                     self.dataset.num_entities,
                     self.loss_fn,
                 )  # type: ignore[call-arg]
-                epoch_losses.append(float(jnp.asarray(loss)))
+                loss_sum = loss_sum + loss
+                num_batches += 1
                 global_step += 1
 
-            if epoch_losses:
-                avg_loss = float(jnp.mean(jnp.asarray(epoch_losses)))
+            if num_batches:
+                avg_loss = float(jax.device_get(loss_sum / num_batches))
                 train_losses.append(avg_loss)
             else:
                 avg_loss = float("nan")
