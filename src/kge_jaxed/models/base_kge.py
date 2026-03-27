@@ -166,6 +166,33 @@ class BaseKGE(ABC, nnx.Module):
             )
         return loss
 
+    def regularization_loss_for_ids(
+        self,
+        entity_ids: Array | None = None,
+        relation_ids: Array | None = None,
+    ) -> Array:
+        """
+        Compute regularization loss only for the embeddings touched by the current batch.
+
+        :param entity_ids: Entity ids whose embeddings should be regularized
+        :type entity_ids: Array | None
+        :param relation_ids: Relation ids whose embeddings should be regularized
+        :type relation_ids: Array | None
+        :return: Regularization loss
+        :rtype: Array
+        """
+        loss = jnp.array(0.0)
+
+        if self.entity_regularizer is not None and self.entity_regularizer_weight > 0 and entity_ids is not None:
+            entity_rows = self.entity_embedding(entity_ids)
+            loss = loss + jnp.asarray(self.entity_regularizer_weight) * self.entity_regularizer(entity_rows)
+
+        if self.relation_regularizer is not None and self.relation_regularizer_weight > 0 and relation_ids is not None:
+            relation_rows = self.relation_embedding(relation_ids)
+            loss = loss + jnp.asarray(self.relation_regularizer_weight) * self.relation_regularizer(relation_rows)
+
+        return loss
+
     def apply_constraints(self) -> None:
         """
         Apply constraints to entity and relation embeddings if constrainers are defined.
