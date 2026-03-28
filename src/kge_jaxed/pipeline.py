@@ -354,14 +354,12 @@ class KGEPipeline:
         if any(k <= 0 for k in ks):
             raise ValueError("ks values must be positive integers")
 
-        tail_filter_map, head_filter_map = build_eval_filter_maps(self.dataset, filtered)
+        filter_maps = build_eval_filter_maps(self.dataset, filtered)
 
         tail_ranks, tail_scores = evaluate_corruption_side(
             self.model,
             eval_df,
-            group_cols=["head", "relation"],
-            value_col="tail",
-            filter_map=tail_filter_map,
+            filter_map=filter_maps.tail,
             corruption_side="tail",
             num_entities=self.dataset.num_entities,
             eval_batch_size=eval_batch_size,
@@ -369,9 +367,7 @@ class KGEPipeline:
         head_ranks, head_scores = evaluate_corruption_side(
             self.model,
             eval_df,
-            group_cols=["relation", "tail"],
-            value_col="head",
-            filter_map=head_filter_map,
+            filter_map=filter_maps.head,
             corruption_side="head",
             num_entities=self.dataset.num_entities,
             eval_batch_size=eval_batch_size,
