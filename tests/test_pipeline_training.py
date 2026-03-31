@@ -9,6 +9,7 @@ from flax import nnx
 
 from kge_jaxed.datasets.base import BaseDataset
 from kge_jaxed.pipeline import KGEPipeline
+from kge_jaxed.training import checkpointing as ckpt
 
 
 class TrainingDataset(BaseDataset):
@@ -49,7 +50,7 @@ def _optimizer_state_leaves(optimizer: nnx.Optimizer) -> list[jax.Array]:
 
 def _assert_array_leaves_equal(actual: list[jax.Array], expected: list[jax.Array]) -> None:
     assert len(actual) == len(expected)
-    assert all(jnp.array_equal(a, b) for a, b in zip(actual, expected))
+    assert all(jnp.array_equal(a, b) for a, b in zip(actual, expected, strict=True))
 
 
 def test_pipeline_train_validates_arguments(tmp_path) -> None:
@@ -153,7 +154,9 @@ def test_pipeline_checkpoint_load_restores_model_optimizer_and_counters(tmp_path
     saved_global_step = pipeline.global_step
 
     pipeline.train(epochs=1, log_every=10)
-    assert any(not jnp.array_equal(a, b) for a, b in zip(_param_leaves(pipeline.model), saved_param_leaves))
+    assert any(
+        not jnp.array_equal(a, b) for a, b in zip(_param_leaves(pipeline.model), saved_param_leaves, strict=True)
+    )
 
     restored_pipeline = KGEPipeline(
         model="transe",
@@ -242,6 +245,38 @@ def test_pipeline_checkpoint_load_warns_on_learning_rate_mismatch(tmp_path) -> N
 
     assert metadata is not None
     _assert_array_leaves_equal(_param_leaves(restored_pipeline.model), saved_param_leaves)
+
+
+def test_checkpoint_load_can_restore_model_without_optimizer_state(tmp_path) -> None:
+    checkpoint_path = tmp_path / "checkpoint"
+    pipeline = KGEPipeline(
+        model="transe",
+        loss_name="mrl",
+        dataset=TrainingDataset(),
+        embedding_dim=8,
+        seed=0,
+    )
+    pipeline.train(epochs=1, log_every=10)
+    pipeline.save_checkpoint(str(checkpoint_path), epoch=pipeline.epoch, global_step=pipeline.global_step)
+
+    saved_param_leaves = _param_leaves(pipeline.model)
+    restored_pipeline = KGEPipeline(
+        model="transe",
+        loss_name="mrl",
+        dataset=TrainingDataset(),
+        embedding_dim=8,
+        seed=0,
+    )
+
+    restored_model, restored_optimizer, metadata = ckpt.restore_checkpoint(
+        str(checkpoint_path),
+        model=restored_pipeline.model,
+        restore_optimizer_state=False,
+    )
+
+    assert restored_optimizer is None
+    assert metadata is not None
+    _assert_array_leaves_equal(_param_leaves(restored_model), saved_param_leaves)
 
 
 def test_pipeline_checkpoint_load_without_metadata_restores_state(tmp_path) -> None:

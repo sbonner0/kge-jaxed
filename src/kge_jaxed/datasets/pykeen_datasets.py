@@ -1,5 +1,7 @@
 """Contains the PyKEEN dataset class. This allows for the use of PyKEEN's built-in datasets."""
 
+from typing import Any
+
 import pandas as pd  # type: ignore
 from pykeen.datasets import get_dataset
 
@@ -17,7 +19,7 @@ class PyKEENDataset(BaseDataset):
         dataset_name: str,
         batch_size: int = 32,
         shuffle: bool = True,
-        seed: int = 0,
+        pykeen_dataset_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """
         Uses PyKEEN built-in datasets to create knowledge graphs.
@@ -28,11 +30,14 @@ class PyKEENDataset(BaseDataset):
         :type batch_size: int, optional
         :param shuffle: Whether to shuffle the dataset, defaults to True
         :type shuffle: bool, optional
-        :param seed: Random seed for shuffling, defaults to 0
-        :type seed: int, optional
+        :param dataset_kwargs: Optional additional keyword arguments to pass to the PyKEEN dataset constructor,
+            defaults to None
+        :type dataset_kwargs: dict[str, Any] | None, optional
         """
-        super().__init__(batch_size=batch_size, shuffle=shuffle, seed=seed)
+        super().__init__(batch_size=batch_size, shuffle=shuffle)
         self.dataset_name = dataset_name
+        self.pykeen_dataset_kwargs = pykeen_dataset_kwargs or {}
+
         self.load_data()
 
     def load_data(self) -> None:
@@ -41,7 +46,8 @@ class PyKEENDataset(BaseDataset):
         """
 
         # Load the dataset from PyKEEN
-        pykeen_ds = get_dataset(dataset=self.dataset_name)
+        pykeen_ds = get_dataset(dataset=self.dataset_name, **self.pykeen_dataset_kwargs)
+        self.pykeen_ds = pykeen_ds
 
         # Extract the training, validation, and test triples
         self.train_df = pd.DataFrame(
@@ -57,6 +63,12 @@ class PyKEENDataset(BaseDataset):
         # Set the number of entities and relations
         self.num_entities = pykeen_ds.num_entities
         self.num_relations = pykeen_ds.num_relations
+
+        # Create the entity and relation id to label mappings
+        self.entity_to_id = self.pykeen_ds.entity_to_id
+        self.id_to_entity = {v: k for k, v in self.entity_to_id.items()}
+        self.relation_to_id = self.pykeen_ds.relation_to_id
+        self.id_to_relation = {v: k for k, v in self.relation_to_id.items()}
 
 
 if __name__ == "__main__":

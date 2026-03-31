@@ -72,7 +72,9 @@ class KGEPipeline:
             as a string name.
         :type model_kwargs: dict[str, Any] | None, optional
         :param dataset_kwargs: Keyword arguments forwarded when ``dataset`` is
-            given as a string name.
+            given as a string name. Dataset-specific options such as the dataset
+            seed should be passed here rather than relying on the pipeline
+            ``seed``.
         :type dataset_kwargs: dict[str, Any] | None, optional
         :param embedding_dim: Entity embedding dimension used when constructing a
             model from a string name.
@@ -111,7 +113,7 @@ class KGEPipeline:
         self.epoch = 0
         self.global_step = 0
 
-        self.dataset, self.dataset_name = resolve_dataset(dataset, dataset_kwargs, seed=self.seed)
+        self.dataset, self.dataset_name = resolve_dataset(dataset, dataset_kwargs)
         self.loss_fn = get_loss(self.loss_name, **self.loss_kwargs)
         self.rng_manager = RngManager(self.seed)
         self.model, self.model_name, self.embedding_dim, self.model_kwargs = resolve_model(
@@ -178,7 +180,7 @@ class KGEPipeline:
             metadata["epoch"] = int(epoch)
         if global_step is not None:
             metadata["global_step"] = int(global_step)
-        ckpt.save_checkpoint(
+        ckpt.write_checkpoint(
             checkpoint_path,
             model=self.model,
             optimizer=self.optimizer,
@@ -207,7 +209,7 @@ class KGEPipeline:
                 optimizer_kwargs=self.optimizer_kwargs,
             )
 
-        self.model, self.optimizer, metadata = ckpt.load_checkpoint(
+        restored_model, restored_optimizer, metadata = ckpt.restore_checkpoint(
             checkpoint_path,
             model=self.model,
             optimizer=self.optimizer,
@@ -215,6 +217,10 @@ class KGEPipeline:
             expected_metadata=self._checkpoint_metadata(),
             warn_metadata_keys={"learning_rate", "optimizer_name", "optimizer_kwargs"},
         )
+        if restored_optimizer is None:
+            raise RuntimeError("restore_checkpoint returned no optimizer during pipeline checkpoint restore")
+        self.model = restored_model
+        self.optimizer = restored_optimizer
         if metadata is not None:
             self.epoch = int(metadata.get("epoch", 0))
             self.global_step = int(metadata.get("global_step", 0))
