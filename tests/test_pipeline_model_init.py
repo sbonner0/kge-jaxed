@@ -121,7 +121,13 @@ def test_pipeline_forwards_dataset_kwargs_for_dataset_name(monkeypatch):
     captured: dict[str, object] = {}
 
     class StubPyKEENDataset(DummyDataset):
-        def __init__(self, dataset_name: str, batch_size: int = 32, shuffle: bool = True, seed: int = 0) -> None:
+        def __init__(
+            self,
+            dataset_name: str,
+            batch_size: int = 32,
+            shuffle: bool = True,
+            seed: int = 0,
+        ) -> None:
             super().__init__()
             captured["dataset_name"] = dataset_name
             captured["batch_size"] = batch_size
@@ -138,7 +144,7 @@ def test_pipeline_forwards_dataset_kwargs_for_dataset_name(monkeypatch):
         model="transe",
         loss_name="mrl",
         dataset="dummy",
-        dataset_kwargs={"batch_size": 7, "shuffle": False},
+        dataset_kwargs={"batch_size": 7, "shuffle": False, "seed": 11},
         seed=11,
     )
 
@@ -147,6 +153,52 @@ def test_pipeline_forwards_dataset_kwargs_for_dataset_name(monkeypatch):
     assert captured["shuffle"] is False
     assert captured["seed"] == 11
     assert pipeline.dataset.batch_size == 7
+    assert pipeline.dataset.seed == 11
+
+
+def test_pipeline_forwards_pykeen_dataset_kwargs(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class StubPyKEENDataset(DummyDataset):
+        def __init__(
+            self,
+            dataset_name: str,
+            batch_size: int = 32,
+            shuffle: bool = True,
+            pykeen_dataset_kwargs: dict[str, object] | None = None,
+        ) -> None:
+            super().__init__()
+            captured["dataset_name"] = dataset_name
+            captured["batch_size"] = batch_size
+            captured["shuffle"] = shuffle
+            captured["pykeen_dataset_kwargs"] = pykeen_dataset_kwargs
+            self.dataset_name = dataset_name
+            self.batch_size = batch_size
+            self.shuffle = shuffle
+            self.pykeen_dataset_kwargs = pykeen_dataset_kwargs
+
+    monkeypatch.setattr(training_setup, "PyKEENDataset", StubPyKEENDataset)
+
+    pykeen_dataset_kwargs = {
+        "create_inverse_triples": True,
+        "eager": False,
+    }
+    pipeline = KGEPipeline(
+        model="transe",
+        loss_name="mrl",
+        dataset="dummy",
+        dataset_kwargs={
+            "batch_size": 7,
+            "shuffle": False,
+            "pykeen_dataset_kwargs": pykeen_dataset_kwargs,
+        },
+    )
+
+    assert captured["dataset_name"] == "dummy"
+    assert captured["batch_size"] == 7
+    assert captured["shuffle"] is False
+    assert captured["pykeen_dataset_kwargs"] == pykeen_dataset_kwargs
+    assert pipeline.dataset.pykeen_dataset_kwargs == pykeen_dataset_kwargs
 
 
 def test_pipeline_rejects_dataset_kwargs_with_dataset_instance():

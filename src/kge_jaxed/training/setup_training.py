@@ -1,7 +1,5 @@
 """Setup helpers for pipeline construction and checkpoint metadata."""
 
-from __future__ import annotations
-
 from typing import Any
 
 from flax import nnx
@@ -13,16 +11,10 @@ from kge_jaxed.registries import get_model, get_optimizer
 from kge_jaxed.rngs import RngManager
 
 
-def resolve_dataset(
-    dataset: str | BaseDataset,
-    dataset_kwargs: dict[str, Any],
-    *,
-    seed: int,
-) -> tuple[BaseDataset, str | None]:
+def resolve_dataset(dataset: str | BaseDataset, dataset_kwargs: dict[str, Any]) -> tuple[BaseDataset, str | None]:
     """Resolve a dataset input into a dataset instance and label."""
     if isinstance(dataset, str):
         resolved_dataset_kwargs = dict(dataset_kwargs)
-        resolved_dataset_kwargs.setdefault("seed", seed)
         resolved_dataset = PyKEENDataset(
             dataset_name=dataset,
             **resolved_dataset_kwargs,

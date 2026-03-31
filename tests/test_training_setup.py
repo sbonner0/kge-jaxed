@@ -21,11 +21,17 @@ class DummyDataset(BaseDataset):
         return None
 
 
-def test_resolve_dataset_forwards_seed_and_kwargs(monkeypatch) -> None:
+def test_resolve_dataset_forwards_dataset_kwargs(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     class StubPyKEENDataset(DummyDataset):
-        def __init__(self, dataset_name: str, batch_size: int = 32, shuffle: bool = True, seed: int = 0) -> None:
+        def __init__(
+            self,
+            dataset_name: str,
+            batch_size: int = 32,
+            shuffle: bool = True,
+            seed: int = 0,
+        ) -> None:
             super().__init__()
             captured["dataset_name"] = dataset_name
             captured["batch_size"] = batch_size
@@ -40,8 +46,7 @@ def test_resolve_dataset_forwards_seed_and_kwargs(monkeypatch) -> None:
 
     dataset, dataset_name = resolve_dataset(
         "dummy",
-        {"batch_size": 7, "shuffle": False},
-        seed=11,
+        {"batch_size": 7, "shuffle": False, "seed": 11},
     )
 
     assert captured == {
@@ -52,11 +57,56 @@ def test_resolve_dataset_forwards_seed_and_kwargs(monkeypatch) -> None:
     }
     assert dataset_name == "dummy"
     assert dataset.batch_size == 7
+    assert dataset.seed == 11
+
+
+def test_resolve_dataset_forwards_pykeen_dataset_kwargs(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class StubPyKEENDataset(DummyDataset):
+        def __init__(
+            self,
+            dataset_name: str,
+            batch_size: int = 32,
+            shuffle: bool = True,
+            pykeen_dataset_kwargs: dict[str, object] | None = None,
+        ) -> None:
+            super().__init__()
+            captured["dataset_name"] = dataset_name
+            captured["batch_size"] = batch_size
+            captured["shuffle"] = shuffle
+            captured["pykeen_dataset_kwargs"] = pykeen_dataset_kwargs
+            self.dataset_name = dataset_name
+            self.batch_size = batch_size
+            self.shuffle = shuffle
+            self.pykeen_dataset_kwargs = pykeen_dataset_kwargs
+
+    monkeypatch.setattr(training_setup, "PyKEENDataset", StubPyKEENDataset)
+
+    pykeen_dataset_kwargs = {
+        "create_inverse_triples": True,
+        "eager": False,
+    }
+    dataset, dataset_name = resolve_dataset(
+        "dummy",
+        {
+            "batch_size": 7,
+            "shuffle": False,
+            "pykeen_dataset_kwargs": pykeen_dataset_kwargs,
+        },
+    )
+
+    assert captured["dataset_name"] == "dummy"
+    assert captured["batch_size"] == 7
+    assert captured["shuffle"] is False
+    assert captured["pykeen_dataset_kwargs"] == pykeen_dataset_kwargs
+    assert dataset_name == "dummy"
+    assert dataset.pykeen_dataset_kwargs == pykeen_dataset_kwargs
 
 
 def test_resolve_dataset_rejects_kwargs_with_dataset_instance() -> None:
     with pytest.raises(ValueError, match="dataset_kwargs"):
-        resolve_dataset(DummyDataset(), {"batch_size": 7}, seed=0)
+        resolve_dataset(DummyDataset(), {"batch_size": 7})
 
 
 def test_resolve_model_rejects_kwargs_with_prebuilt_model() -> None:
