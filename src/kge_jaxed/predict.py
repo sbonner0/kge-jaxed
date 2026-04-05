@@ -96,10 +96,10 @@ class KGEPredict:
         :type query_entity: str
         :param relation: The relation of the triple.
         :type relation: str
-        :param tail: The tail entity of the triple.
-        :type tail: str
-        :return: The predicted score for the given triple.
-        :rtype: float
+        :param predict_side: The side of the triple to predict ("head" or "tail").
+        :type predict_side: str
+        :return: A DataFrame containing the predicted scores and split membership for each entity.
+        :rtype: pd.DataFrame
         """
 
         if predict_side not in {"head", "tail"}:
