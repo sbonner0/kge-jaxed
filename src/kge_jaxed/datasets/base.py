@@ -38,6 +38,10 @@ class BaseDataset(ABC):
         self.dataset_name: str | None = None
         self.num_entities = 0
         self.num_relations = 0
+        self.entity_to_id: dict[str, int] = {}
+        self.relation_to_id: dict[str, int] = {}
+        self.id_to_entity: dict[int, str] = {}
+        self.id_to_relation: dict[int, str] = {}
 
     @abstractmethod
     def load_data(self) -> None:
