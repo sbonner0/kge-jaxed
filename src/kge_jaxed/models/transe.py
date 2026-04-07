@@ -10,8 +10,10 @@ class TransE(BaseKGE):
 
     DEFAULT_EMBEDDING_DIM = 50
     DEFAULT_NORM = 1
+    DEFAULT_ENTITY_EMBEDDING_KWARGS = {"embedding_init": "xavier"}
+    DEFAULT_RELATION_EMBEDDING_KWARGS = {"embedding_init": "xavier_uniform_norm"}
     DEFAULT_ENTITY_CONSTRAINER_KWARGS = {"name": "unit_norm"}
-    DEFAULT_RELATION_CONSTRAINER_KWARGS = {"name": "unit_norm"}
+    DEFAULT_RELATION_CONSTRAINER_KWARGS = {}
 
     def __init__(
         self,
@@ -39,8 +41,10 @@ class TransE(BaseKGE):
         Defaults:
             entity_embedding_dim: 50
             norm: 1
+            entity_embedding_kwargs: {"embedding_init": "xavier"}
+            relation_embedding_kwargs: {"embedding_init": "xavier_uniform_norm"}
             entity_constrainer: unit_norm
-            relation_constrainer: unit_norm
+            relation_constrainer: None
 
         :param num_entities: Number of entities in the knowledge graph.
         :type num_entities: int
@@ -77,6 +81,10 @@ class TransE(BaseKGE):
             "Translating Embeddings for Modeling Multi-relational Data."
             NeurIPS 2013.
         """
+        if entity_embedding_kwargs is None:
+            entity_embedding_kwargs = dict(self.DEFAULT_ENTITY_EMBEDDING_KWARGS)
+        if relation_embedding_kwargs is None:
+            relation_embedding_kwargs = dict(self.DEFAULT_RELATION_EMBEDDING_KWARGS)
         if entity_constrainer_kwargs is None:
             entity_constrainer_kwargs = dict(self.DEFAULT_ENTITY_CONSTRAINER_KWARGS)
         if relation_constrainer_kwargs is None:

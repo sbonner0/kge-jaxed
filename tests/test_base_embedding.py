@@ -58,6 +58,13 @@ def test_embedding_init_callable_respected():
     assert not jnp.allclose(weights_uniform, weights_callable)
 
 
+def test_embedding_init_xavier_uniform_norm_unit_rows():
+    emb = BaseEmbedding(num_embeddings=10, embedding_dim=4, seed=0, embedding_init="xavier_uniform_norm")
+    weights = _get_embedding_weights(emb)
+    norms = jnp.linalg.norm(weights, axis=1)
+    assert jnp.allclose(norms, jnp.ones_like(norms), atol=1e-6)
+
+
 def test_embedding_init_phases_unit_modulus():
     emb = BaseEmbedding(
         num_embeddings=10,
