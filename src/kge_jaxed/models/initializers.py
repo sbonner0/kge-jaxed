@@ -36,6 +36,15 @@ def _complex_phase_init() -> Callable:
     return init
 
 
+def _normalized_init(base_init: Callable, *, eps: float = 1e-9) -> Callable:
+    def init(key, shape, dtype=jnp.float32):
+        weights = base_init(key, shape, dtype=dtype)
+        norm = jnp.linalg.norm(weights, axis=-1, keepdims=True)
+        return weights / jnp.maximum(norm, eps)
+
+    return init
+
+
 def resolve_embedding_init(
     embedding_init: str | Callable | None, embedding_init_kwargs: dict | None
 ) -> Callable | None:
@@ -46,6 +55,7 @@ def resolve_embedding_init(
     :type embedding_init: str | Callable | None
     :param embedding_init_kwargs: Optional kwargs used only for string-based initializers.
         For xavier/glorot, you may pass scale/mode/distribution to use variance scaling.
+        For normalized initializers, you may also pass ``eps`` for numerical stability.
     :type embedding_init_kwargs: dict | None
     :return: A callable initializer, or None to use the underlying layer default.
     :rtype: Callable | None
@@ -70,6 +80,9 @@ def resolve_embedding_init(
         return _complex_from_real_init(nnx_initializers.normal(**kwargs))
     if name in {"xavier", "glorot", "xavier_uniform", "glorot_uniform"}:
         return _maybe_variance_scaling(kwargs, distribution="uniform")
+    if name in {"xavier_uniform_norm", "glorot_uniform_norm", "xavier_norm", "glorot_norm"}:
+        eps = float(kwargs.pop("eps", 1e-9))
+        return _normalized_init(_maybe_variance_scaling(kwargs, distribution="uniform"), eps=eps)
     if name in {"xavier_normal", "glorot_normal"}:
         return _maybe_variance_scaling(kwargs, distribution="truncated_normal")
     if name in {"zeros"}:
@@ -90,8 +103,12 @@ def resolve_embedding_init(
         "complex_normal",
         "xavier",
         "xavier_uniform",
+        "xavier_uniform_norm",
+        "xavier_norm",
         "xavier_normal",
         "glorot_uniform",
+        "glorot_uniform_norm",
+        "glorot_norm",
         "glorot_normal",
         "zeros",
         "ones",

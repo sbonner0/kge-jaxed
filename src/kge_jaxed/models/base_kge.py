@@ -64,6 +64,8 @@ class BaseKGE(ABC, nnx.Module):
         :param relation_constrainer_kwargs: Constrainer config for relation embeddings.
             Supports ``name`` and constrainer kwargs.
         :type relation_constrainer_kwargs: dict | None, optional
+        Configured constrainers are applied once after initialization and after
+        optimizer updates during training.
         :param rngs: RNGs for the module. If None, a default RNG stream is created
             with seed ``42``.
         :type rngs: nnx.Rngs, optional
@@ -118,6 +120,7 @@ class BaseKGE(ABC, nnx.Module):
         # Build constrainers for entity and relation embeddings
         self.entity_constrainer = self._build_constrainer(entity_constrainer_kwargs)
         self.relation_constrainer = self._build_constrainer(relation_constrainer_kwargs)
+        self.apply_constraints()
 
     def score_hrt(self, triples: Array, *, dropout_rngs: nnx.Rngs | None = None) -> Array:
         """
