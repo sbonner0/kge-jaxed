@@ -81,15 +81,6 @@ class TransE(BaseKGE):
             "Translating Embeddings for Modeling Multi-relational Data."
             NeurIPS 2013.
         """
-        if entity_embedding_kwargs is None:
-            entity_embedding_kwargs = dict(self.DEFAULT_ENTITY_EMBEDDING_KWARGS)
-        if relation_embedding_kwargs is None:
-            relation_embedding_kwargs = dict(self.DEFAULT_RELATION_EMBEDDING_KWARGS)
-        if entity_constrainer_kwargs is None:
-            entity_constrainer_kwargs = dict(self.DEFAULT_ENTITY_CONSTRAINER_KWARGS)
-        if relation_constrainer_kwargs is None:
-            relation_constrainer_kwargs = dict(self.DEFAULT_RELATION_CONSTRAINER_KWARGS)
-
         super().__init__(
             num_entities=num_entities,
             num_relations=num_relations,
