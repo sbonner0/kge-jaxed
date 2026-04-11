@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Any
+from typing import Any, ClassVar
 
 import jax.numpy as jnp
 from flax import nnx
@@ -20,7 +20,28 @@ class BaseKGE(ABC, nnx.Module):
     Score convention:
         Implementations must return scores where ``higher is better`` (more plausible).
         All built-in losses are written against this convention.
+
+    Subclasses can define class-level defaults for embedding, regularizer, and
+    constrainer configuration by overriding the ``DEFAULT_*_KWARGS`` dictionaries.
+    Constructor config resolution follows these rules:
+
+    * ``None`` uses the subclass default.
+    * Embedding kwargs are merged over subclass defaults, so callers can set
+      options like ``dropout_rate`` without losing model-specific initializers
+      or dtypes. To change an embedding default, override the specific key.
+    * Regularizer and constrainer kwargs replace subclass defaults, because
+      merging those configs can accidentally pass stale kwargs to a different
+      registered component.
+    * For regularizers and constrainers, an empty dict disables the subclass
+      default.
     """
+
+    DEFAULT_ENTITY_EMBEDDING_KWARGS: ClassVar[dict[str, Any]] = {}
+    DEFAULT_RELATION_EMBEDDING_KWARGS: ClassVar[dict[str, Any]] = {}
+    DEFAULT_ENTITY_REGULARIZER_KWARGS: ClassVar[dict[str, Any]] = {}
+    DEFAULT_RELATION_REGULARIZER_KWARGS: ClassVar[dict[str, Any]] = {}
+    DEFAULT_ENTITY_CONSTRAINER_KWARGS: ClassVar[dict[str, Any]] = {}
+    DEFAULT_RELATION_CONSTRAINER_KWARGS: ClassVar[dict[str, Any]] = {}
 
     def __init__(
         self,
@@ -48,9 +69,13 @@ class BaseKGE(ABC, nnx.Module):
         :param relation_embedding_dim: Dimensionality of relation embeddings. If None,
             uses ``entity_embedding_dim``.
         :type relation_embedding_dim: int | None, optional
-        :param entity_embedding_kwargs: Args for the entity embedding, defaults to {}
+        :param entity_embedding_kwargs: Args for the entity embedding. If ``None``,
+            uses the subclass default. Provided kwargs are merged over the
+            subclass default.
         :type entity_embedding_kwargs: dict, optional
-        :param relation_embedding_kwargs: Args for the relation embedding, defaults to {}
+        :param relation_embedding_kwargs: Args for the relation embedding. If
+            ``None``, uses the subclass default. Provided kwargs are merged over
+            the subclass default.
         :type relation_embedding_kwargs: dict, optional
         :param entity_regularizer_kwargs: Regularizer config for entities. Supports
             ``name`` and regularizer kwargs, plus optional ``weight`` handled by BaseKGE.
@@ -81,18 +106,32 @@ class BaseKGE(ABC, nnx.Module):
             relation_embedding_dim if relation_embedding_dim is not None else entity_embedding_dim
         )
 
-        if entity_embedding_kwargs is None:
-            entity_embedding_kwargs = {}
-        if relation_embedding_kwargs is None:
-            relation_embedding_kwargs = {}
-        if entity_regularizer_kwargs is None:
-            entity_regularizer_kwargs = {}
-        if relation_regularizer_kwargs is None:
-            relation_regularizer_kwargs = {}
-        if entity_constrainer_kwargs is None:
-            entity_constrainer_kwargs = {}
-        if relation_constrainer_kwargs is None:
-            relation_constrainer_kwargs = {}
+        entity_embedding_kwargs = self._config_or_default(
+            entity_embedding_kwargs,
+            "DEFAULT_ENTITY_EMBEDDING_KWARGS",
+            merge=True,
+        )
+        relation_embedding_kwargs = self._config_or_default(
+            relation_embedding_kwargs,
+            "DEFAULT_RELATION_EMBEDDING_KWARGS",
+            merge=True,
+        )
+        entity_regularizer_kwargs = self._config_or_default(
+            entity_regularizer_kwargs,
+            "DEFAULT_ENTITY_REGULARIZER_KWARGS",
+        )
+        relation_regularizer_kwargs = self._config_or_default(
+            relation_regularizer_kwargs,
+            "DEFAULT_RELATION_REGULARIZER_KWARGS",
+        )
+        entity_constrainer_kwargs = self._config_or_default(
+            entity_constrainer_kwargs,
+            "DEFAULT_ENTITY_CONSTRAINER_KWARGS",
+        )
+        relation_constrainer_kwargs = self._config_or_default(
+            relation_constrainer_kwargs,
+            "DEFAULT_RELATION_CONSTRAINER_KWARGS",
+        )
 
         # Build embeddings
         self.entity_embedding = BaseEmbedding(
@@ -204,6 +243,21 @@ class BaseKGE(ABC, nnx.Module):
             return
         self.entity_embedding.apply_constrainer(self.entity_constrainer)
         self.relation_embedding.apply_constrainer(self.relation_constrainer)
+
+    @classmethod
+    def _config_or_default(
+        cls,
+        config: dict[str, Any] | None,
+        default_name: str,
+        *,
+        merge: bool = False,
+    ) -> dict[str, Any]:
+        default_config = dict(getattr(cls, default_name))
+        if config is None:
+            return default_config
+        if merge:
+            return default_config | dict(config)
+        return dict(config)
 
     @staticmethod
     def _build_regularizer(kwargs: dict[str, Any]) -> Any | None:

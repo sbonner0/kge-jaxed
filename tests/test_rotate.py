@@ -22,6 +22,21 @@ def test_rotate_constructor_defaults() -> None:
     assert jnp.allclose(relation_modulus, jnp.ones_like(relation_modulus), atol=1e-6)
 
 
+def test_rotate_embedding_kwargs_extend_defaults() -> None:
+    model = RotatE(
+        num_entities=6,
+        num_relations=3,
+        rngs=nnx.Rngs(0),
+        entity_embedding_kwargs={"dropout_rate": 0.5},
+        relation_embedding_kwargs={"dropout_rate": 0.5},
+    )
+
+    assert model.entity_embedding.dropout_rate == 0.5
+    assert model.relation_embedding.dropout_rate == 0.5
+    assert model.entity_weights().dtype == jnp.complex64
+    assert model.relation_weights().dtype == jnp.complex64
+
+
 def test_rotate_score_hrt_matches_l2_distance() -> None:
     model = RotatE(num_entities=3, num_relations=2, entity_embedding_dim=2, norm=2, rngs=nnx.Rngs(0))
     _set_embedding_weights(

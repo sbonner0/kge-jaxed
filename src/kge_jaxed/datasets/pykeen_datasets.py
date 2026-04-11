@@ -20,6 +20,7 @@ class PyKEENDataset(BaseDataset):
         dataset_name: str,
         batch_size: int = 32,
         shuffle: bool = True,
+        seed: int = 0,
         pykeen_dataset_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """
@@ -31,11 +32,14 @@ class PyKEENDataset(BaseDataset):
         :type batch_size: int, optional
         :param shuffle: Whether to shuffle the dataset, defaults to True
         :type shuffle: bool, optional
+        :param seed: Random seed for shuffling, defaults to 0
+        :type seed: int, optional
         :param pykeen_dataset_kwargs: Optional additional keyword arguments to pass to the PyKEEN dataset constructor,
             defaults to None
         :type pykeen_dataset_kwargs: dict[str, Any] | None, optional
         """
-        super().__init__(batch_size=batch_size, shuffle=shuffle)
+        super().__init__(batch_size=batch_size, shuffle=shuffle, seed=seed)
+        self.dataset_name = dataset_name
         self.pykeen_dataset_kwargs = pykeen_dataset_kwargs or {}
 
         self.load_data()
@@ -46,7 +50,7 @@ class PyKEENDataset(BaseDataset):
         """
 
         # Load the dataset from PyKEEN
-        pykeen_ds = get_dataset(dataset=self.dataset_name, **self.pykeen_dataset_kwargs)
+        pykeen_ds = get_dataset(dataset=self.dataset_name, dataset_kwargs=self.pykeen_dataset_kwargs)
         self.pykeen_ds = pykeen_ds
 
         # Extract the training, validation, and test triples

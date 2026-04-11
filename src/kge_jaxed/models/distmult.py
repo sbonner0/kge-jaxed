@@ -75,11 +75,6 @@ class DistMult(BaseKGE):
             "Embedding Entities and Relations for Learning and Inference in Knowledge Bases."
             ICLR 2015.
         """
-        if entity_constrainer_kwargs is None:
-            entity_constrainer_kwargs = dict(self.DEFAULT_ENTITY_CONSTRAINER_KWARGS)
-        if relation_regularizer_kwargs is None:
-            relation_regularizer_kwargs = dict(self.DEFAULT_RELATION_REGULARIZER_KWARGS)
-
         super().__init__(
             num_entities=num_entities,
             num_relations=num_relations,
