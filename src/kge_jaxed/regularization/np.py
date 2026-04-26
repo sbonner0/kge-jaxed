@@ -11,16 +11,18 @@ class NpRegularizer:
 
     This is a power penalty, not a norm: it omits the 1/p root, so large
     components are penalized more aggressively than Lp. For example, p=3
-    corresponds to the N3 regularizer used in some KGE literature.
+    corresponds to the N3 regularizer used in some KGE literature. When
+    ``normalize=True``, each row penalty is divided by the embedding dimension.
     """
 
-    def __init__(self, p: float = 3.0, reduction: str = "mean") -> None:
+    def __init__(self, p: float = 3.0, reduction: str = "mean", normalize: bool = False) -> None:
         if p <= 0:
             raise ValueError("p must be positive")
         if reduction not in {"mean", "sum"}:
             raise ValueError("reduction must be 'mean' or 'sum'")
         self.p = float(p)
         self.reduction = reduction
+        self.normalize = bool(normalize)
 
     def __call__(self, params: Any) -> jnp.ndarray:
         leaves = jax.tree_util.tree_leaves(params)
@@ -29,6 +31,8 @@ class NpRegularizer:
 
         def _leaf_value(x: jnp.ndarray) -> jnp.ndarray:
             values = jnp.sum(jnp.abs(x) ** self.p, axis=-1)
+            if self.normalize:
+                values = values / jnp.asarray(x.shape[-1], dtype=values.dtype)
             if self.reduction == "mean":
                 return jnp.mean(values)
             return jnp.sum(values)
