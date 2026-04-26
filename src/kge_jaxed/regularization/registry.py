@@ -6,6 +6,9 @@ from kge_jaxed.regularization.np import NpRegularizer
 REGULARIZERS = {
     "lp": LpRegularizer,
     "np": NpRegularizer,
+    "powersum": NpRegularizer,
+    "power_sum": NpRegularizer,
+    "n3": NpRegularizer,
 }
 
 

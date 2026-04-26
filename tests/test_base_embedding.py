@@ -65,6 +65,31 @@ def test_embedding_init_xavier_uniform_norm_unit_rows():
     assert jnp.allclose(norms, jnp.ones_like(norms), atol=1e-6)
 
 
+def test_embedding_init_pykeen_norm_aliases_unit_rows():
+    for initializer in ["uniform_norm", "normal_norm", "xavier_normal_norm"]:
+        emb = BaseEmbedding(num_embeddings=10, embedding_dim=4, seed=0, embedding_init=initializer)
+        weights = _get_embedding_weights(emb)
+        norms = jnp.linalg.norm(weights, axis=1)
+        assert jnp.allclose(norms, jnp.ones_like(norms), atol=1e-6)
+
+
+def test_embedding_init_callable_receives_kwargs():
+    def constant_init(key, shape, dtype=jnp.float32, value=1.5):
+        del key
+        return jnp.full(shape, value, dtype=dtype)
+
+    emb = BaseEmbedding(
+        num_embeddings=3,
+        embedding_dim=2,
+        seed=0,
+        embedding_init=constant_init,
+        embedding_init_kwargs={"value": 2.5},
+    )
+
+    weights = _get_embedding_weights(emb)
+    assert jnp.allclose(weights, jnp.full((3, 2), 2.5, dtype=jnp.float32))
+
+
 def test_embedding_init_phases_unit_modulus():
     emb = BaseEmbedding(
         num_embeddings=10,

@@ -186,6 +186,85 @@ metrics_df, ranks_df = pipeline.evaluate(
 print(metrics_df)
 ```
 
+## Embedding initializers, constrainers, and regularizers
+
+KGE models often need small operations around the embedding tables in addition to
+the interaction function itself.
+
+- Initializers choose the starting embedding values before training.
+- Constrainers project embedding values after initialization and after each
+  optimizer step. They enforce hard constraints such as unit-length entity
+  vectors or unit-modulus complex relation values.
+- Regularizers add a soft penalty to the training loss. They encourage smaller
+  or simpler embeddings, but they do not strictly enforce a constraint.
+
+These are configured separately for entity and relation embeddings through
+`model_kwargs`:
+
+```python
+from kge_jaxed import KGEPipeline
+
+pipeline = KGEPipeline(
+    model="rotate",
+    dataset="nations",
+    loss_name="nssa",
+    embedding_dim=128,
+    model_kwargs={
+        "entity_embedding_kwargs": {
+            "embedding_init": "normal_norm",
+            "embedding_init_kwargs": {"stddev": 0.1},
+        },
+        "relation_embedding_kwargs": {
+            "embedding_init": "init_phases",
+        },
+        "relation_constrainer_kwargs": {
+            "name": "unit_modulus",
+        },
+        "entity_regularizer_kwargs": {
+            "name": "lp",
+            "p": 2.0,
+            "normalize": True,
+            "weight": 0.01,
+        },
+    },
+)
+```
+
+The most useful built-in initializer names are:
+
+| Name | Meaning |
+| --- | --- |
+| `uniform`, `normal` | Random uniform or normal initialization |
+| `uniform_norm`, `normal_norm` | Random initialization followed by row-wise unit normalization |
+| `xavier`, `xavier_uniform`, `glorot_uniform` | Glorot uniform initialization |
+| `xavier_uniform_norm`, `glorot_uniform_norm` | Glorot uniform initialization followed by row-wise unit normalization |
+| `xavier_normal`, `glorot_normal` | Glorot normal initialization |
+| `xavier_normal_norm`, `glorot_normal_norm` | Glorot normal initialization followed by row-wise unit normalization |
+| `complex_normal`, `complex_uniform` | Complex-valued initialization with independent real and imaginary parts |
+| `init_phases`, `complex_phases` | Complex unit-modulus values, useful for RotatE relations |
+
+The built-in constrainers are:
+
+| Name | Meaning |
+| --- | --- |
+| `unit_norm` or `normalize` | Normalize each embedding row to unit L2 norm |
+| `max_norm` or `clamp_norm` | Project rows with norm above `max_value` back to that norm |
+| `clip` or `clamp` | Clip individual values into `[min_value, max_value]` |
+| `non_negative` | Replace negative values with zero |
+| `unit_modulus` or `complex_normalize` | Project each complex value to magnitude one |
+
+The built-in regularizers are:
+
+| Name | Meaning |
+| --- | --- |
+| `lp` | Mean or sum of row-wise Lp norms |
+| `np`, `powersum`, `power_sum`, `n3` | Mean or sum of `sum(abs(x) ** p)` per row; `p=3` gives an N3-style penalty |
+
+Passing `None` for a model config uses that model's default. Passing an empty
+dict such as `entity_constrainer_kwargs={}` disables that default. This matters
+for models such as `TransE`, which constrains entity embeddings by default, and
+`RotatE`, which constrains relation embeddings to unit modulus by default.
+
 ## Save and resume training
 
 You can also save checkpoints during training:

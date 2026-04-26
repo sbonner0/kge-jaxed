@@ -1,3 +1,5 @@
+"""Embedding constrainers and registry helpers."""
+
 from kge_jaxed.constraints.constrainers import (
     clip,
     max_norm,
