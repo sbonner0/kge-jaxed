@@ -17,7 +17,7 @@ from kge_jaxed.evaluation.ranking import (
     resolve_eval_dataframe,
 )
 from kge_jaxed.models.base_kge import BaseKGE
-from kge_jaxed.registries import get_loss
+from kge_jaxed.registry import losses
 from kge_jaxed.rngs import RngManager
 from kge_jaxed.training import checkpointing as ckpt
 from kge_jaxed.training.setup_training import (
@@ -114,7 +114,7 @@ class KGEPipeline:
         self.global_step = 0
 
         self.dataset, self.dataset_name = resolve_dataset(dataset, dataset_kwargs)
-        self.loss_fn = get_loss(self.loss_name, **self.loss_kwargs)
+        self.loss_fn = losses.build(self.loss_name, **self.loss_kwargs)
         self.rng_manager = RngManager(self.seed)
         self.model, self.model_name, self.embedding_dim, self.model_kwargs = resolve_model(
             model,

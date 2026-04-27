@@ -2,15 +2,14 @@ import jax.numpy as jnp
 import pytest
 
 from kge_jaxed.constraints.constrainers import clip, max_norm, unit_modulus
-from kge_jaxed.constraints.registry import get_constrainer
-from kge_jaxed.regularization.registry import get_regularizer
+from kge_jaxed.registry import constrainers, regularizers
 
 
 def test_pykeen_constrainer_aliases_resolve() -> None:
-    assert get_constrainer("normalize") is get_constrainer("unit_norm")
-    assert get_constrainer("clamp") is get_constrainer("clip")
-    assert get_constrainer("clamp_norm") is get_constrainer("max_norm")
-    assert get_constrainer("complex_normalize") is get_constrainer("unit_modulus")
+    assert constrainers.get("normalize") is constrainers.get("unit_norm")
+    assert constrainers.get("clamp") is constrainers.get("clip")
+    assert constrainers.get("clamp_norm") is constrainers.get("max_norm")
+    assert constrainers.get("complex_normalize") is constrainers.get("unit_modulus")
 
 
 def test_unit_modulus_projects_zero_to_unit_value() -> None:
@@ -29,14 +28,14 @@ def test_constrainer_factories_validate_arguments() -> None:
 
 
 def test_powersum_regularizer_alias_and_normalization() -> None:
-    regularizer = get_regularizer("powersum")(p=2.0, normalize=True)
+    regularizer = regularizers.build("powersum", p=2.0, normalize=True)
     weights = jnp.array([[3.0, 4.0], [1.0, 1.0]], dtype=jnp.float32)
 
     assert float(regularizer(weights)) == pytest.approx(6.75)
 
 
 def test_n3_regularizer_alias_uses_np_regularizer_defaults() -> None:
-    regularizer = get_regularizer("n3")()
+    regularizer = regularizers.build("n3")
     weights = jnp.array([[1.0, 2.0]], dtype=jnp.float32)
 
     assert float(regularizer(weights)) == pytest.approx(9.0)

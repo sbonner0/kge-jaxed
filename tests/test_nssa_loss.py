@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 
 from kge_jaxed.loss_functions.losses import self_adversarial_negative_sampling_loss
-from kge_jaxed.registries import get_loss, list_losses
+from kge_jaxed.registry import losses
 
 
 def test_nssa_matches_rotate_style_reference_without_margin() -> None:
@@ -73,13 +73,13 @@ def test_nssa_gradient_matches_constant_weight_reference() -> None:
 
 
 def test_registry_binds_nssa_kwargs() -> None:
-    assert "nssa" in list_losses()
+    assert "nssa" in losses.names()
 
     pos_scores = jnp.array([0.2], dtype=jnp.float32)
     neg_scores = jnp.array([[0.1, 0.3]], dtype=jnp.float32)
     kwargs = {"adversarial_temperature": 0.5, "margin": 1.0}
 
-    loss_fn = get_loss("nssa", **kwargs)
+    loss_fn = losses.build("nssa", **kwargs)
     expected = self_adversarial_negative_sampling_loss(pos_scores, neg_scores, **kwargs)
     actual = loss_fn(pos_scores, neg_scores)
 

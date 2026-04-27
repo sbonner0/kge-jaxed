@@ -1,4 +1,4 @@
-"""Embedding constrainers and registry helpers."""
+"""Embedding constrainers."""
 
 from kge_jaxed.constraints.constrainers import (
     clip,
@@ -7,7 +7,6 @@ from kge_jaxed.constraints.constrainers import (
     unit_modulus,
     unit_norm,
 )
-from kge_jaxed.constraints.registry import get_constrainer, list_constrainers
 
 __all__ = [
     "clip",
@@ -15,6 +14,4 @@ __all__ = [
     "non_negative",
     "unit_modulus",
     "unit_norm",
-    "get_constrainer",
-    "list_constrainers",
 ]
