@@ -113,71 +113,13 @@ def resolve_embedding_init(
     if not isinstance(embedding_init, str):
         raise TypeError("embedding_init must be a string, a callable, or None.")
 
+    from kge_jaxed.registry import initializers
+
     name = embedding_init.strip().lower()
-    kwargs = dict(embedding_init_kwargs or {})
-
-    if name in {"default"}:
-        return None
-    if name in {"uniform"}:
-        return nnx_initializers.uniform(**kwargs)
-    if name in {"uniform_norm"}:
-        eps = float(kwargs.pop("eps", 1e-9))
-        return _normalized_init(nnx_initializers.uniform(**kwargs), eps=eps)
-    if name in {"normal"}:
-        return nnx_initializers.normal(**kwargs)
-    if name in {"normal_norm"}:
-        eps = float(kwargs.pop("eps", 1e-9))
-        return _normalized_init(nnx_initializers.normal(**kwargs), eps=eps)
-    if name in {"complex_normal"}:
-        return _complex_from_real_init(nnx_initializers.normal(**kwargs))
-    if name in {"xavier", "glorot", "xavier_uniform", "glorot_uniform"}:
-        return _maybe_variance_scaling(kwargs, distribution="uniform")
-    if name in {"xavier_uniform_norm", "glorot_uniform_norm", "xavier_norm", "glorot_norm"}:
-        eps = float(kwargs.pop("eps", 1e-9))
-        return _normalized_init(_maybe_variance_scaling(kwargs, distribution="uniform"), eps=eps)
-    if name in {"xavier_normal", "glorot_normal"}:
-        return _maybe_variance_scaling(kwargs, distribution="truncated_normal")
-    if name in {"xavier_normal_norm", "glorot_normal_norm"}:
-        eps = float(kwargs.pop("eps", 1e-9))
-        return _normalized_init(_maybe_variance_scaling(kwargs, distribution="truncated_normal"), eps=eps)
-    if name in {"zeros"}:
-        return nnx_initializers.zeros
-    if name in {"ones"}:
-        return nnx_initializers.ones
-    if name in {"orthogonal"}:
-        return nnx_initializers.orthogonal(**kwargs)
-    if name in {"complex_uniform"}:
-        return _complex_from_real_init(nnx_initializers.uniform(**kwargs))
-    if name in {"complex_phases", "init_phases", "phases"}:
-        return _complex_phase_init()
-
-    available = [
-        "default",
-        "uniform",
-        "uniform_norm",
-        "normal",
-        "normal_norm",
-        "complex_normal",
-        "xavier",
-        "xavier_uniform",
-        "xavier_uniform_norm",
-        "xavier_norm",
-        "xavier_normal",
-        "xavier_normal_norm",
-        "glorot_uniform",
-        "glorot_uniform_norm",
-        "glorot_norm",
-        "glorot_normal",
-        "glorot_normal_norm",
-        "zeros",
-        "ones",
-        "orthogonal",
-        "complex_uniform",
-        "complex_phases",
-        "init_phases",
-        "phases",
-    ]
-    raise ValueError(f"Unknown embedding_init '{embedding_init}'. Available: {available}")
+    available = initializers.names()
+    if name not in available:
+        raise ValueError(f"Unknown embedding_init '{embedding_init}'. Available: {available}")
+    return initializers.build(name, **dict(embedding_init_kwargs or {}))
 
 
 def _maybe_variance_scaling(kwargs: dict, *, distribution: str) -> Callable:
@@ -208,3 +150,71 @@ def _maybe_variance_scaling(kwargs: dict, *, distribution: str) -> Callable:
         if distribution == "uniform"
         else nnx_initializers.glorot_normal(**local_kwargs)
     )
+
+
+def _default_initializer(**kwargs) -> Callable | None:
+    return None
+
+
+def _uniform_initializer(**kwargs) -> Callable:
+    return nnx_initializers.uniform(**kwargs)
+
+
+def _uniform_norm_initializer(**kwargs) -> Callable:
+    local_kwargs = dict(kwargs)
+    eps = float(local_kwargs.pop("eps", 1e-9))
+    return _normalized_init(nnx_initializers.uniform(**local_kwargs), eps=eps)
+
+
+def _normal_initializer(**kwargs) -> Callable:
+    return nnx_initializers.normal(**kwargs)
+
+
+def _normal_norm_initializer(**kwargs) -> Callable:
+    local_kwargs = dict(kwargs)
+    eps = float(local_kwargs.pop("eps", 1e-9))
+    return _normalized_init(nnx_initializers.normal(**local_kwargs), eps=eps)
+
+
+def _complex_normal_initializer(**kwargs) -> Callable:
+    return _complex_from_real_init(nnx_initializers.normal(**kwargs))
+
+
+def _xavier_uniform_initializer(**kwargs) -> Callable:
+    return _maybe_variance_scaling(kwargs, distribution="uniform")
+
+
+def _xavier_uniform_norm_initializer(**kwargs) -> Callable:
+    local_kwargs = dict(kwargs)
+    eps = float(local_kwargs.pop("eps", 1e-9))
+    return _normalized_init(_maybe_variance_scaling(local_kwargs, distribution="uniform"), eps=eps)
+
+
+def _xavier_normal_initializer(**kwargs) -> Callable:
+    return _maybe_variance_scaling(kwargs, distribution="truncated_normal")
+
+
+def _xavier_normal_norm_initializer(**kwargs) -> Callable:
+    local_kwargs = dict(kwargs)
+    eps = float(local_kwargs.pop("eps", 1e-9))
+    return _normalized_init(_maybe_variance_scaling(local_kwargs, distribution="truncated_normal"), eps=eps)
+
+
+def _zeros_initializer(**kwargs) -> Callable:
+    return nnx_initializers.zeros
+
+
+def _ones_initializer(**kwargs) -> Callable:
+    return nnx_initializers.ones
+
+
+def _orthogonal_initializer(**kwargs) -> Callable:
+    return nnx_initializers.orthogonal(**kwargs)
+
+
+def _complex_uniform_initializer(**kwargs) -> Callable:
+    return _complex_from_real_init(nnx_initializers.uniform(**kwargs))
+
+
+def _complex_phase_initializer(**kwargs) -> Callable:
+    return _complex_phase_init()

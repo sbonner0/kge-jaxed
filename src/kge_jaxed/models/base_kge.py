@@ -8,9 +8,8 @@ import jax.numpy as jnp
 from flax import nnx
 from jax import Array
 
-from kge_jaxed.constraints.registry import get_constrainer
 from kge_jaxed.models.base_embedding import BaseEmbedding
-from kge_jaxed.regularization.registry import get_regularizer
+from kge_jaxed.registry import constrainers, regularizers
 from kge_jaxed.rngs import make_model_rngs
 
 
@@ -265,7 +264,7 @@ class BaseKGE(ABC, nnx.Module):
         if name is None:
             return None
 
-        regularizer_cls = get_regularizer(name)
+        regularizer_cls = regularizers.get(name)
         regularizer_kwargs = {k: v for k, v in kwargs.items() if k != "name"}
         return regularizer_cls(**regularizer_kwargs)
 
@@ -274,7 +273,7 @@ class BaseKGE(ABC, nnx.Module):
         name = kwargs.get("name")
         if name is None:
             return None
-        constrainer_factory = get_constrainer(name)
+        constrainer_factory = constrainers.get(name)
         constrainer_kwargs = {k: v for k, v in kwargs.items() if k != "name"}
         return constrainer_factory(**constrainer_kwargs)
 

@@ -7,7 +7,7 @@ from flax import nnx
 from kge_jaxed.datasets.base import BaseDataset
 from kge_jaxed.datasets.pykeen_datasets import PyKEENDataset
 from kge_jaxed.models.base_kge import BaseKGE
-from kge_jaxed.registries import get_model, get_optimizer
+from kge_jaxed.registry import models, optimizers
 from kge_jaxed.rngs import RngManager
 
 
@@ -42,7 +42,7 @@ def resolve_model(
     if isinstance(model, str):
         model_name = model
         resolved_embedding_dim = int(embedding_dim)
-        model_cls = get_model(model_name)
+        model_cls = models.get(model_name)
         resolved_model = model_cls(
             num_entities=dataset.num_entities,
             num_relations=dataset.num_relations,
@@ -74,7 +74,7 @@ def build_optimizer(
     optimizer_kwargs: dict[str, Any],
 ) -> nnx.Optimizer:
     """Create an optimizer bound to a model's parameters."""
-    optimizer_factory = get_optimizer(optimizer_name)
+    optimizer_factory = optimizers.get(optimizer_name)
     optimizer_transform = optimizer_factory(learning_rate, **optimizer_kwargs)
     return nnx.Optimizer(model, optimizer_transform, wrt=nnx.Param)
 
