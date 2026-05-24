@@ -7,28 +7,33 @@
 
 This project started as a way for me to learn JAX by building something I already understood: Knowledge Graph Embedding models.
 
-It is not intended to be a production-ready knowledge graph embedding library, and I would not recommend it as the default choice for serious work. If you want a mature package with broader coverage, better tooling, and a much more complete feature set, use [PyKEEN](https://github.com/pykeen/pykeen).
+> It is not intended to be a production-ready library, and I would not recommend it for serious work. If you want a mature and battle tested package with broader coverage, better tooling, and a much more complete feature set, use [PyKEEN](https://github.com/pykeen/pykeen).
 
-KGE-JAXed is a small JAX/Flax NNX knowledge graph embedding library inspired by PyKEEN. The main goal is to keep the code easy to read and easy to extend while still following JAX-friendly patterns.
+KGE-JAXed is a small JAX/Flax NNX knowledge graph embedding library inspired by PyKEEN. The main goal is to keep the code easy to read and extend, while still following JAX-friendly patterns.
+
+## Project Overview
+
+KGE-JAXed is a small, learning-oriented knowledge graph embedding package built with JAX and Flax NNX. It provides a compact implementation of classic KGE training workflows while keeping the codebase readable enough to inspect, modify, and extend.
+
+The main entry point is `KGEPipeline`, which handles dataset loading, model construction, training, evaluation, and checkpointing. Datasets are resolved through PyKEEN, so the project can focus on model, loss, sampling, and evaluation logic rather than dataset packaging.
+
+Currently, the project supports:
+
+- Training classic KGE models such as `TransE`, `DistMult`, `ComplEx`, and `RotatE`
+- Running link-prediction evaluation with MR, MRR, and Hits@K metrics
+- Inspecting per-triple ranking results directly through `ranks_df`, rather than only seeing aggregated metrics
+- Saving and resuming training with checkpoints
+- Customizing embedding initializers, constrainers, and regularizers
+
+The project is best suited for learning JAX, experimenting with KGE model internals, and working with a smaller codebase where the full training and evaluation path is easy to follow.
 
 ## Installation
 
-This repository uses `uv`.
+This repository uses `uv`. To install the package and associated dependencies, run:
 
 ```bash
 uv sync
 ```
-
-## What this project is
-
-At the moment, this is mainly a small package for:
-
-- A simple training and evaluation pipeline via `KGEPipeline`
-- Trying out a few classic KGE models in JAX
-- Running experiments on datasets provided by PyKEEN
-- Learning and experimenting, rather than building a full production library
-
-If you just want to use it, the main thing you need is the pipeline.
 
 ## Quick start
 
@@ -94,9 +99,16 @@ print(train_summary["train_losses"][-5:])
 print(metrics_df)
 ```
 
-`metrics_df` gives you the ranking metrics such as MRR, MR, and Hits@K.
+`evaluate()` returns two dataframes:
 
-`ranks_df` is the more interesting output if you want to inspect model behaviour in detail. Instead of only giving you aggregate metrics, it gives you a row-by-row view of evaluation results for each triple.
+- `metrics_df` gives you the usual aggregate ranking metrics such as MRR, MR, and Hits@K.
+- `ranks_df` gives you the actual ranks and scores for each evaluated triple.
+
+## Per-triple ranking results
+
+One of the main reasons I like this project is that evaluation does not stop at a single aggregate score. Aggregate metrics are useful for comparing runs, but they hide which triples the model gets right, which ones it struggles with, and whether the errors are mostly coming from head prediction or tail prediction.
+
+`ranks_df` keeps that information visible. It gives you a row-by-row view of the evaluation results, with one row per evaluated triple.
 
 It contains:
 
@@ -106,26 +118,58 @@ It contains:
 - `score_head` for the score assigned to the true head query
 - `score_tail` for the score assigned to the true tail query
 
-That makes it easy to answer questions like:
+That makes it easy to answer more diagnostic questions:
 
 - Which triples are hardest for the model?
 - Is the model much better at head prediction or tail prediction?
-- Which examples are getting rank 1 and which are failing badly?
+- Which examples are getting rank 1?
+- Which examples are failing badly even when the aggregate MRR looks reasonable?
 - Which relations seem to be causing the worst errors?
 
-For example:
+First, you can map the integer IDs back to readable entity and relation labels:
 
 ```python
-print(ranks_df.head())
+ranks_with_labels = ranks_df.assign(
+    head_label=lambda df: df["head"].map(pipeline.dataset.id_to_entity),
+    relation_label=lambda df: df["relation"].map(pipeline.dataset.id_to_relation),
+    tail_label=lambda df: df["tail"].map(pipeline.dataset.id_to_entity),
+)
 
-# Hardest triples by tail rank
-print(ranks_df.sort_values("rank_tail", ascending=False).head(10))
-
-# Hardest triples by head rank
-print(ranks_df.sort_values("rank_head", ascending=False).head(10))
+print(ranks_with_labels.head())
 ```
 
-I like this because it makes evaluation much easier to debug. You can look beyond a single MRR number and actually inspect where the model is doing well or badly.
+Then you can inspect the worst-ranked examples directly:
+
+```python
+# Hardest triples by tail rank
+print(
+    ranks_with_labels.sort_values("rank_tail", ascending=False)[
+        ["head_label", "relation_label", "tail_label", "rank_tail", "score_tail"]
+    ].head(10)
+)
+
+# Hardest triples by head rank
+print(
+    ranks_with_labels.sort_values("rank_head", ascending=False)[
+        ["head_label", "relation_label", "tail_label", "rank_head", "score_head"]
+    ].head(10)
+)
+```
+
+Or summarize the errors by relation:
+
+```python
+relation_summary = (
+    ranks_with_labels.assign(avg_rank=lambda df: (df["rank_head"] + df["rank_tail"]) / 2)
+    .groupby("relation_label")["avg_rank"]
+    .mean()
+    .sort_values(ascending=False)
+)
+
+print(relation_summary.head(10))
+```
+
+This makes evaluation much easier to debug. You can look beyond a single MRR number and inspect where the model is doing well or badly.
 
 A typical `metrics_df` looks like this:
 
@@ -186,17 +230,77 @@ metrics_df, ranks_df = pipeline.evaluate(
 print(metrics_df)
 ```
 
+## Save and resume training
+
+You can also save checkpoints during training:
+
+```python
+from kge_jaxed import KGEPipeline
+
+pipeline = KGEPipeline(
+    model="transe",
+    dataset="nations",
+    loss_name="mrl",
+    embedding_dim=128,
+)
+
+pipeline.train(
+    epochs=50,
+    log_every=5,
+    save_checkpoint_dir="checkpoints/transe-nations",
+    save_every=10,
+)
+```
+
+Then later:
+
+```python
+from kge_jaxed import KGEPipeline
+
+pipeline = KGEPipeline(
+    model="transe",
+    dataset="nations",
+    loss_name="mrl",
+    embedding_dim=128,
+)
+
+pipeline.load_checkpoint("checkpoints/transe-nations")
+pipeline.train(epochs=20, log_every=5)
+```
+
+## Datasets
+
+This project uses PyKEEN datasets rather than re-implementing dataset download and packaging.
+
+If you pass a dataset name such as `"nations"` or `"fb15k"` into the pipeline, it is resolved through PyKEEN. For the full list of available datasets, see the [PyKEEN dataset documentation](https://pykeen.readthedocs.io/en/latest/reference/datasets.html).
+
+## Supported models
+
+These are the models currently registered in the library:
+
+| Model name | Class | Status |
+| --- | --- | --- |
+| `transe` | `TransE` | Implemented |
+| `distmult` | `DistMult` | Implemented |
+| `complex` | `ComplEx` | Implemented |
+| `rotate` | `RotatE` | Implemented |
+
+## Supported losses
+
+| Loss name | Meaning |
+| --- | --- |
+| `mrl` | Margin ranking loss |
+| `bce` | Binary cross-entropy loss |
+| `softplus` | Softplus loss |
+| `nssa` | Self-adversarial negative sampling loss |
+
 ## Embedding initializers, constrainers, and regularizers
 
-KGE models often need small operations around the embedding tables in addition to
-the interaction function itself.
+KGE models often need small operations around the embedding tables in addition to the interaction function itself.
 
 - Initializers choose the starting embedding values before training.
-- Constrainers project embedding values after initialization and after each
-  optimizer step. They enforce hard constraints such as unit-length entity
-  vectors or unit-modulus complex relation values.
-- Regularizers add a soft penalty to the training loss. They encourage smaller
-  or simpler embeddings, but they do not strictly enforce a constraint.
+- Constrainers project embedding values after initialization and after each optimizer step. They enforce hard constraints such as unit-length entity vectors or unit-modulus complex relation values.
+- Regularizers add a soft penalty to the training loss. They encourage smaller or simpler embeddings, but they do not strictly enforce a constraint.
 
 These are configured separately for entity and relation embeddings through
 `model_kwargs`:
@@ -264,82 +368,6 @@ Passing `None` for a model config uses that model's default. Passing an empty
 dict such as `entity_constrainer_kwargs={}` disables that default. This matters
 for models such as `TransE`, which constrains entity embeddings by default, and
 `RotatE`, which constrains relation embeddings to unit modulus by default.
-
-## Save and resume training
-
-You can also save checkpoints during training:
-
-```python
-from kge_jaxed import KGEPipeline
-
-pipeline = KGEPipeline(
-    model="transe",
-    dataset="nations",
-    loss_name="mrl",
-    embedding_dim=128,
-)
-
-pipeline.train(
-    epochs=50,
-    log_every=5,
-    save_checkpoint_dir="checkpoints/transe-nations",
-    save_every=10,
-)
-```
-
-Then later:
-
-```python
-from kge_jaxed import KGEPipeline
-
-pipeline = KGEPipeline(
-    model="transe",
-    dataset="nations",
-    loss_name="mrl",
-    embedding_dim=128,
-)
-
-pipeline.load_checkpoint("checkpoints/transe-nations")
-pipeline.train(epochs=20, log_every=5)
-```
-
-## Datasets
-
-This project uses PyKEEN datasets rather than re-implementing dataset download and packaging.
-
-If you pass a dataset name such as `"nations"` or `"fb15k"` into the pipeline, it is resolved through PyKEEN. For the full list of available datasets, see the [PyKEEN dataset documentation](https://pykeen.readthedocs.io/en/latest/reference/datasets.html).
-
-## Supported models
-
-These are the models currently registered in the library:
-
-| Model name | Class | Status |
-| --- | --- | --- |
-| `transe` | `TransE` | Implemented |
-| `distmult` | `DistMult` | Implemented |
-| `complex` | `ComplEx` | Implemented |
-| `rotate` | `RotatE` | Implemented |
-
-## Supported losses
-
-| Loss name | Meaning |
-| --- | --- |
-| `mrl` | Margin ranking loss |
-| `bce` | Binary cross-entropy loss |
-| `softplus` | Softplus loss |
-| `nssa` | Self-adversarial negative sampling loss |
-
-## Current scope
-
-This repository is best thought of as:
-
-- A personal JAX learning project
-- A clean, small reference implementation
-- A place to experiment with KGE models in JAX and Flax NNX
-- Not a polished end-user library
-- Intentionally small in model coverage
-
-If you need a broader and more battle-tested package, PyKEEN is the better choice.
 
 ## Development
 
