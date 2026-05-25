@@ -3,12 +3,14 @@ import sys
 
 from kge_jaxed.loss_functions.losses import self_adversarial_negative_sampling_loss
 from kge_jaxed.models.initializers import resolve_embedding_init
+from kge_jaxed.models.trans import TranS
 from kge_jaxed.models.transe import TransE
 from kge_jaxed.registry import constrainers, initializers, losses, models, optimizers, regularizers
 
 
 def test_registry_facade_resolves_builtin_components() -> None:
     assert models.get("transe") is TransE
+    assert models.get("trans") is TranS
     assert losses.build("nssa") is self_adversarial_negative_sampling_loss
     assert "adam" in optimizers.names()
 

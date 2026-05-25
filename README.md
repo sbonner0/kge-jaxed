@@ -281,6 +281,7 @@ These are the models currently registered in the library:
 | Model name | Class | Status |
 | --- | --- | --- |
 | `transe` | `TransE` | Implemented |
+| `trans` | `TranS` | Implemented |
 | `distmult` | `DistMult` | Implemented |
 | `complex` | `ComplEx` | Implemented |
 | `rotate` | `RotatE` | Implemented |

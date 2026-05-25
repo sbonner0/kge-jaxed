@@ -6,6 +6,7 @@ import kge_jaxed.training.setup_training as training_setup
 from kge_jaxed.datasets.base import BaseDataset
 from kge_jaxed.loss_functions.losses import self_adversarial_negative_sampling_loss
 from kge_jaxed.models.distmult import DistMult
+from kge_jaxed.models.trans import TranS
 from kge_jaxed.models.transe import TransE
 from kge_jaxed.pipeline import KGEPipeline
 from kge_jaxed.rngs import make_model_rngs
@@ -115,6 +116,23 @@ def test_pipeline_accepts_rotate_model_name_string():
     )
 
     assert pipeline.model_name == "rotate"
+
+
+def test_pipeline_accepts_trans_model_name_string():
+    dataset = DummyDataset()
+
+    pipeline = KGEPipeline(
+        model="trans",
+        loss_name="mrl",
+        dataset=dataset,
+        embedding_dim=8,
+    )
+
+    assert pipeline.model_name == "trans"
+    assert isinstance(pipeline.model, TranS)
+    assert pipeline.model.entity_embedding_dim == 8
+    assert pipeline.model.entity_embedding.emb.embedding.shape == (dataset.num_entities, 16)
+    assert pipeline.model.relation_embedding.emb.embedding.shape == (dataset.num_relations, 24)
 
 
 def test_pipeline_forwards_dataset_kwargs_for_dataset_name(monkeypatch):
