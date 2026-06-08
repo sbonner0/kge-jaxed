@@ -273,7 +273,7 @@ class KGEPipeline:
         print(f"Starting training for {epochs} epochs (resume from epoch {start_epoch})...")
 
         for epoch in range(start_epoch, start_epoch + epochs):
-            loss_sum = jnp.array(0.0)
+            loss_sum = 0.0
             num_batches = 0
 
             for batch in self.dataset.iter_batches("train", shuffle=True, seed=self.seed + epoch):
@@ -288,12 +288,12 @@ class KGEPipeline:
                     self.dataset.num_entities,
                     self.loss_fn,
                 )  # type: ignore[call-arg]
-                loss_sum = loss_sum + loss
+                loss_sum += float(jax.device_get(loss))
                 num_batches += 1
                 global_step += 1
 
             if num_batches:
-                avg_loss = float(jax.device_get(loss_sum / num_batches))
+                avg_loss = loss_sum / num_batches
                 train_losses.append(avg_loss)
             else:
                 avg_loss = float("nan")

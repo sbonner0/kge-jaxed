@@ -193,6 +193,10 @@ class BaseKGE(ABC, nnx.Module):
         """
         Compute the regularization loss for entity and relation embeddings.
 
+        Operates over the full embedding matrix. Useful for inspection and testing.
+        The training path uses :meth:`regularization_loss_for_ids` instead, which
+        restricts regularization to the embeddings touched by the current batch.
+
         :return: Regularization loss
         :rtype: Array
         """

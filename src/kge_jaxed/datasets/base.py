@@ -113,32 +113,3 @@ class BaseDataset(ABC):
 
         for start in range(0, len(array), batch_size):
             yield array[start : start + batch_size]
-
-    def iter_eval_batches(
-        self,
-        split: Literal["train", "val", "test"] = "test",
-        *,
-        batch_size: int | None = None,
-        df: pd.DataFrame | None = None,
-    ):
-        """
-        Create an iterator for evaluation (no shuffling).
-
-        :param split: Which split to use, defaults to "test"
-        :type split: Literal[], optional
-        :param batch_size: Batch size, defaults to self.batch_size
-        :type batch_size: int | None, optional
-        :param df: Optional DataFrame override for evaluation
-        :type df: pd.DataFrame | None, optional
-        :return: Iterator over batches of triples
-        :rtype: Iterator[np.ndarray]
-        """
-        if df is None:
-            yield from self.iter_batches(split, batch_size=batch_size, shuffle=False)
-            return
-
-        if batch_size is None:
-            batch_size = self.batch_size
-        array = np.ascontiguousarray(df[["head", "relation", "tail"]].to_numpy(dtype=np.int32, copy=True))
-        for start in range(0, len(array), batch_size):
-            yield array[start : start + batch_size]

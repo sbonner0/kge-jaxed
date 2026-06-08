@@ -51,6 +51,7 @@ def score_grouped_pairs(
 
     for start in range(0, len(pairs), eval_batch_size):
         batch_pairs = pairs[start : start + eval_batch_size]
+        # Entity 0 is a placeholder; score_all_entities_batch replaces it with every entity.
         dummy = np.zeros(len(batch_pairs), dtype=np.int32)
         if corruption_side == "tail":
             triples = np.column_stack([batch_pairs[:, 0], batch_pairs[:, 1], dummy])

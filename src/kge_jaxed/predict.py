@@ -29,10 +29,9 @@ class KGEPredict:
         # Resolve and load the dataset
         # TODO: Maybe we should save the triples with the model and load them here instead of reconstructing the dataset
         dataset_name = self.metadata.get("dataset_name")
-        dataset_kwargs = self.metadata.get("dataset_kwargs", {})
         if dataset_name is None:
             raise KeyError("Missing required key 'dataset_name' in metadata")
-        self.dataset, self.dataset_name = resolve_dataset(dataset_name, dataset_kwargs)
+        self.dataset, self.dataset_name = resolve_dataset(dataset_name, {})
 
         # Resolve the model architecture and config
         model_name = self.metadata.get("model_name")
@@ -70,7 +69,7 @@ class KGEPredict:
         :type query_entity: str
         :param relation: The relation of the triple.
         :type relation: str
-        :return: A tuple containing the indices of the head, relation, and tail.
+        :return: A tuple containing the index of the query entity and the relation.
         :rtype: tuple[int, int]
         """
         entity_idx = self.dataset.entity_to_id.get(query_entity)
@@ -112,7 +111,7 @@ class KGEPredict:
             batch_h = jnp.broadcast_to(entity_idx, (1, self.dataset.num_entities))
             batch_r = jnp.broadcast_to(relation_idx, (1, self.dataset.num_entities))
             batch_t = jnp.broadcast_to(all_entities[None, :], (1, self.dataset.num_entities))
-        elif predict_side == "head":
+        else:
             batch_h = jnp.broadcast_to(all_entities[None, :], (1, self.dataset.num_entities))
             batch_r = jnp.broadcast_to(relation_idx, (1, self.dataset.num_entities))
             batch_t = jnp.broadcast_to(entity_idx, (1, self.dataset.num_entities))
