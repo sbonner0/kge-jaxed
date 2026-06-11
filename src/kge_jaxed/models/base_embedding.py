@@ -72,7 +72,9 @@ class BaseEmbedding(nnx.Module):
             rngs=rngs,
             **kwargs,
         )
-        self.dropout = nnx.Dropout(rate=self.dropout_rate, rngs=rngs)
+        # No rngs here: storing an RNG stream in the module would end up in checkpoints.
+        # Dropout keys are always passed explicitly through __call__.
+        self.dropout = nnx.Dropout(rate=self.dropout_rate)
 
     def __call__(self, x, *, rngs: nnx.Rngs | None = None):
         x = self.emb(x)

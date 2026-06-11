@@ -179,6 +179,52 @@ class BaseKGE(ABC, nnx.Module):
 
         return self.interaction_function(h, r, t)
 
+    def score_with_corruptions(
+        self,
+        pos_batch: Array,
+        neg_ent: Array,
+        side: Array,
+        *,
+        dropout_rngs: nnx.Rngs | None = None,
+    ) -> tuple[Array, Array]:
+        """
+        Score positive triples and their corruptions, gathering each embedding row once.
+
+        Mathematically equivalent to assembling [B, K, 3] negative triples and calling :meth:`score_hrt`, but the
+        positive h/r/t rows are gathered once and reused across the K corruptions instead of re-gathered per negative.
+        Relies on interaction functions broadcasting ``[B, 1, D]`` against ``[B, K, D]``.
+
+        When dropout is active, the positive rows (with a single dropout mask) are shared across all corruptions rather
+        than re-dropped per negative.
+
+        :param pos_batch: Positive triples of shape [B, 3].
+        :type pos_batch: Array
+        :param neg_ent: Replacement entity ids of shape [B, K].
+        :type neg_ent: Array
+        :param side: Boolean corruption sides of shape [B, K]; True corrupts the head.
+        :type side: Array
+        :param dropout_rngs: RNGs for dropout, defaults to None
+        :type dropout_rngs: nnx.Rngs | None, optional
+        :return: Tuple ``(pos_scores, neg_scores)`` of shapes [B] and [B, K],
+            where higher means more plausible.
+        :rtype: tuple[Array, Array]
+        """
+        h = self.entity_embedding(pos_batch[:, 0], rngs=dropout_rngs)  # [B, D]
+        r = self.relation_embedding(pos_batch[:, 1], rngs=dropout_rngs)  # [B, D]
+        t = self.entity_embedding(pos_batch[:, 2], rngs=dropout_rngs)  # [B, D]
+        e = self.entity_embedding(neg_ent, rngs=dropout_rngs)  # [B, K, D]
+
+        pos_scores = self.interaction_function(h, r, t)  # [B]
+
+        # One decision per negative: the replacement entity fills exactly one
+        # slot and the positive's embedding keeps the other.
+        corrupt_head = side[..., None]  # [B, K, 1]
+        neg_h = jnp.where(corrupt_head, e, h[:, None, :])  # [B, K, D]
+        neg_t = jnp.where(corrupt_head, t[:, None, :], e)  # [B, K, D]
+        neg_scores = self.interaction_function(neg_h, r[:, None, :], neg_t)  # [B, K]
+
+        return pos_scores, neg_scores
+
     @property
     def uses_dropout(self) -> bool:
         return bool(self.entity_embedding.dropout_rate) or bool(self.relation_embedding.dropout_rate)
@@ -283,5 +329,11 @@ class BaseKGE(ABC, nnx.Module):
 
     @abstractmethod
     def interaction_function(self, h: Array, r: Array, t: Array) -> Array:
-        """Compute triple plausibility scores with the ``higher is better`` convention."""
+        """Compute triple plausibility scores with the ``higher is better`` convention.
+
+        Implementations must be elementwise over broadcastable ``[..., D]`` inputs with
+        a reduction over the last axis only, returning ``[...]`` scores. This lets
+        callers broadcast one relation against many candidate entities (for example
+        ``[B, 1, D]`` against ``[B, K, D]``) without materializing repeated rows.
+        """
         raise NotImplementedError
