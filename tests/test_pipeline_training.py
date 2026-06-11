@@ -15,14 +15,12 @@ from kge_jaxed.training import checkpointing as ckpt
 class TrainingDataset(BaseDataset):
     def __init__(self) -> None:
         super().__init__(batch_size=2, shuffle=False, seed=0)
-        self.train_df = (
-            self._frame(
-                [
-                    (0, 0, 1),
-                    (1, 0, 2),
-                    (2, 0, 3),
-                ]
-            )
+        self.train_df = self._frame(
+            [
+                (0, 0, 1),
+                (1, 0, 2),
+                (2, 0, 3),
+            ]
         )
         self.val_df = self._frame([(0, 0, 2)])
         self.test_df = self._frame([(1, 0, 3)])

@@ -105,4 +105,4 @@ class DistMult(BaseKGE):
         :return: Scores of shape [B], higher is better.
         :rtype: Array
         """
-        return jnp.sum(h * r * t, axis=1)
+        return jnp.sum(h * r * t, axis=-1)

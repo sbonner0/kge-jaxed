@@ -273,8 +273,9 @@ class KGEPipeline:
         print(f"Starting training for {epochs} epochs (resume from epoch {start_epoch})...")
 
         for epoch in range(start_epoch, start_epoch + epochs):
-            loss_sum = 0.0
-            num_batches = 0
+            # Keep per-step losses on device until the epoch ends so the host
+            # never blocks on a step result and JAX can dispatch asynchronously.
+            epoch_losses: list[jax.Array] = []
 
             for batch in self.dataset.iter_batches("train", shuffle=True, seed=self.seed + epoch):
                 batch_array = jnp.asarray(batch)
@@ -288,12 +289,11 @@ class KGEPipeline:
                     self.dataset.num_entities,
                     self.loss_fn,
                 )  # type: ignore[call-arg]
-                loss_sum += float(jax.device_get(loss))
-                num_batches += 1
+                epoch_losses.append(loss)
                 global_step += 1
 
-            if num_batches:
-                avg_loss = loss_sum / num_batches
+            if epoch_losses:
+                avg_loss = float(jnp.mean(jnp.stack(epoch_losses)))
                 train_losses.append(avg_loss)
             else:
                 avg_loss = float("nan")
