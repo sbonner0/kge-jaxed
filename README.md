@@ -5,39 +5,45 @@
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-This project started as a way for me to learn JAX by building something I already understood: Knowledge Graph Embedding models.
+A small knowledge graph embedding (KGE) library built on JAX and Flax NNX, inspired by [PyKEEN](https://github.com/pykeen/pykeen).
 
-> It is not intended to be a production-ready library, and I would not recommend it for serious work. If you want a mature and battle tested package with broader coverage, better tooling, and a much more complete feature set, use [PyKEEN](https://github.com/pykeen/pykeen).
+I started this to learn JAX by building something I already understood. That shaped the design: the code is meant to be read, so I favour explicit, simple implementations over clever abstractions, and get speed from JAX patterns (`jit`, `vmap`) rather than complexity.
 
-KGE-JAXed is a small JAX/Flax NNX knowledge graph embedding library inspired by PyKEEN. The main goal is to keep the code easy to read and extend, while still following JAX-friendly patterns.
+> This is a learning project, not a production library. If you need something mature, well tested, and feature complete, use PyKEEN.
 
-## Project Overview
+## What it does
 
-KGE-JAXed is a small, learning-oriented knowledge graph embedding package built with JAX and Flax NNX. It provides a compact implementation of classic KGE training workflows while keeping the codebase readable enough to inspect, modify, and extend.
+- Trains `TransE`, `DistMult`, `ComplEx`, `RotatE` and `TranS`
+- Evaluates link prediction with MR, MRR and Hits@K
+- Returns per-triple ranks and scores, not just aggregate metrics
+- Saves and resumes training from checkpoints
+- Lets you configure embedding initializers, constrainers and regularizers
 
-The main entry point is `KGEPipeline`, which handles dataset loading, model construction, training, evaluation, and checkpointing. Datasets are resolved through PyKEEN, so the project can focus on model, loss, sampling, and evaluation logic rather than dataset packaging.
-
-Currently, the project supports:
-
-- Training classic KGE models such as `TransE`, `DistMult`, `ComplEx`, and `RotatE`
-- Running link-prediction evaluation with MR, MRR, and Hits@K metrics
-- Inspecting per-triple ranking results directly through `ranks_df`, rather than only seeing aggregated metrics
-- Saving and resuming training with checkpoints
-- Customizing embedding initializers, constrainers, and regularizers
-
-The project is best suited for learning JAX, experimenting with KGE model internals, and working with a smaller codebase where the full training and evaluation path is easy to follow.
+Everything goes through `KGEPipeline`, which handles the dataset, model, training, evaluation and checkpointing. Datasets are loaded through PyKEEN, so this project only has to deal with models, losses, sampling and evaluation.
 
 ## Installation
 
-This repository uses `uv`. To install the package and associated dependencies, run:
+The project uses [uv](https://github.com/astral-sh/uv):
 
 ```bash
 uv sync
 ```
 
+### Hardware support
+
+Which JAX build you get depends on your platform (see `pyproject.toml`):
+
+| Platform | JAX install | Runs on |
+| --- | --- | --- |
+| Linux, x86_64 | `jax[cuda13]` | NVIDIA GPU (CUDA 13) |
+| Linux, other architectures (e.g. ARM) | `jax` | CPU |
+| macOS | `jax` | CPU |
+
+The CUDA build needs a recent NVIDIA driver. Without a compatible GPU, JAX falls back to the CPU. Nothing in the library is CUDA-specific, so the code is the same everywhere. The small datasets such as `nations` train fine on a laptop CPU, but larger ones like `fb15k` will be much slower without a GPU.
+
 ## Quick start
 
-The simplest way to train a model is:
+Train a TransE model on the PyKEEN `nations` dataset, then evaluate it on the test split:
 
 ```python
 from kge_jaxed import KGEPipeline
@@ -53,80 +59,39 @@ pipeline = KGEPipeline(
     seed=42,
 )
 
-pipeline.train(
-    epochs=100,
-    log_every=10,
-)
-```
-
-That will train a `TransE` model on the PyKEEN `nations` dataset.
-
-## Recommended first runs
-
-- Start with `transe` + `mrl` on `nations` if you want the quickest first run
-- Try `rotate` + `nssa` once you want something a bit heavier
-- Use smaller embedding sizes and fewer epochs first if you are just checking that everything works
-
-## Train and evaluate a model
-
-Here is a fuller example that trains a model and then evaluates it on the test split:
-
-```python
-from kge_jaxed import KGEPipeline
-
-pipeline = KGEPipeline(
-    model="transe",
-    dataset="nations",
-    loss_name="mrl",
-    embedding_dim=128,
-    negative_samples=1,
-    learning_rate=1e-2,
-    optimizer_name="adam",
-    seed=42,
-)
-
-train_summary = pipeline.train(
-    epochs=100,
-    log_every=10,
-)
-
-metrics_df, ranks_df = pipeline.evaluate(
-    split="test",
-    filtered=True,
-)
+train_summary = pipeline.train(epochs=100, log_every=10)
+metrics_df, ranks_df = pipeline.evaluate(split="test", filtered=True)
 
 print(train_summary["train_losses"][-5:])
 print(metrics_df)
 ```
 
-`evaluate()` returns two dataframes:
+`evaluate()` returns two dataframes. `metrics_df` holds the aggregate metrics, split by head and tail prediction:
 
-- `metrics_df` gives you the usual aggregate ranking metrics such as MRR, MR, and Hits@K.
-- `ranks_df` gives you the actual ranks and scores for each evaluated triple.
+```text
+         head   tail    avg
+mrr      ...    ...    ...
+mr       ...    ...    ...
+hits@1   ...    ...    ...
+hits@3   ...    ...    ...
+hits@10  ...    ...    ...
+```
 
-## Per-triple ranking results
+`ranks_df` has one row per evaluated triple (see the next section).
 
-One of the main reasons I like this project is that evaluation does not stop at a single aggregate score. Aggregate metrics are useful for comparing runs, but they hide which triples the model gets right, which ones it struggles with, and whether the errors are mostly coming from head prediction or tail prediction.
+## Looking at individual triples
 
-`ranks_df` keeps that information visible. It gives you a row-by-row view of the evaluation results, with one row per evaluated triple.
+A single MRR number tells you little about where a model fails. `ranks_df` keeps the per-triple detail:
 
-It contains:
+```text
+   head  relation  tail  rank_head  rank_tail  score_head  score_tail
+0     0         1     2          1          3      ...        ...
+1     4         2     7          8          1      ...        ...
+```
 
-- `head`, `relation`, `tail` for the evaluated triple
-- `rank_head` for head prediction rank
-- `rank_tail` for tail prediction rank
-- `score_head` for the score assigned to the true head query
-- `score_tail` for the score assigned to the true tail query
+`rank_head` and `rank_tail` are the ranks of the true head and tail, and `score_head` and `score_tail` are the scores the model gave them.
 
-That makes it easy to answer more diagnostic questions:
-
-- Which triples are hardest for the model?
-- Is the model much better at head prediction or tail prediction?
-- Which examples are getting rank 1?
-- Which examples are failing badly even when the aggregate MRR looks reasonable?
-- Which relations seem to be causing the worst errors?
-
-First, you can map the integer IDs back to readable entity and relation labels:
+To make it readable, map the ids back to labels:
 
 ```python
 ranks_with_labels = ranks_df.assign(
@@ -134,29 +99,19 @@ ranks_with_labels = ranks_df.assign(
     relation_label=lambda df: df["relation"].map(pipeline.dataset.id_to_relation),
     tail_label=lambda df: df["tail"].map(pipeline.dataset.id_to_entity),
 )
-
-print(ranks_with_labels.head())
 ```
 
-Then you can inspect the worst-ranked examples directly:
+Then ask questions of it. For example, the triples with the worst tail rank:
 
 ```python
-# Hardest triples by tail rank
 print(
     ranks_with_labels.sort_values("rank_tail", ascending=False)[
         ["head_label", "relation_label", "tail_label", "rank_tail", "score_tail"]
     ].head(10)
 )
-
-# Hardest triples by head rank
-print(
-    ranks_with_labels.sort_values("rank_head", ascending=False)[
-        ["head_label", "relation_label", "tail_label", "rank_head", "score_head"]
-    ].head(10)
-)
 ```
 
-Or summarize the errors by relation:
+Or which relations are hardest on average:
 
 ```python
 relation_summary = (
@@ -169,34 +124,11 @@ relation_summary = (
 print(relation_summary.head(10))
 ```
 
-This makes evaluation much easier to debug. You can look beyond a single MRR number and inspect where the model is doing well or badly.
+## Using a different model
 
-A typical `metrics_df` looks like this:
-
-```text
-         head   tail    avg
-mrr      ...    ...    ...
-mr       ...    ...    ...
-hits@1   ...    ...    ...
-hits@3   ...    ...    ...
-hits@10  ...    ...    ...
-```
-
-And `ranks_df` looks like this:
-
-```text
-   head  relation  tail  rank_head  rank_tail  score_head  score_tail
-0     0         1     2          1          3      ...        ...
-1     4         2     7          8          1      ...        ...
-```
-
-## Train with a different model
-
-You can swap the model and loss configuration directly in the pipeline:
+Models, losses and their options are all set on the pipeline:
 
 ```python
-from kge_jaxed import KGEPipeline
-
 pipeline = KGEPipeline(
     model="rotate",
     dataset="fb15k",
@@ -205,44 +137,21 @@ pipeline = KGEPipeline(
     negative_samples=16,
     learning_rate=1e-3,
     optimizer_name="adam",
-    dataset_kwargs={
-        "batch_size": 256,
-        "shuffle": True,
-    },
-    loss_kwargs={
-        "adversarial_temperature": 1.0,
-        "margin": 6.0,
-    },
+    dataset_kwargs={"batch_size": 256, "shuffle": True},
+    loss_kwargs={"adversarial_temperature": 1.0, "margin": 6.0},
     seed=42,
 )
 
-pipeline.train(
-    epochs=50,
-    log_every=5,
-)
-
-metrics_df, ranks_df = pipeline.evaluate(
-    split="test",
-    filtered=True,
-    ks=(1, 3, 10),
-)
-
-print(metrics_df)
+pipeline.train(epochs=50, log_every=5)
+metrics_df, ranks_df = pipeline.evaluate(split="test", filtered=True, ks=(1, 3, 10))
 ```
 
-## Save and resume training
+## Saving and resuming
 
-You can also save checkpoints during training:
+Pass a directory to `train()` to write checkpoints as you go:
 
 ```python
-from kge_jaxed import KGEPipeline
-
-pipeline = KGEPipeline(
-    model="transe",
-    dataset="nations",
-    loss_name="mrl",
-    embedding_dim=128,
-)
+pipeline = KGEPipeline(model="transe", dataset="nations", loss_name="mrl", embedding_dim=128)
 
 pipeline.train(
     epochs=50,
@@ -252,17 +161,10 @@ pipeline.train(
 )
 ```
 
-Then later:
+Later, build a pipeline with the same configuration and load the checkpoint to carry on:
 
 ```python
-from kge_jaxed import KGEPipeline
-
-pipeline = KGEPipeline(
-    model="transe",
-    dataset="nations",
-    loss_name="mrl",
-    embedding_dim=128,
-)
+pipeline = KGEPipeline(model="transe", dataset="nations", loss_name="mrl", embedding_dim=128)
 
 pipeline.load_checkpoint("checkpoints/transe-nations")
 pipeline.train(epochs=20, log_every=5)
@@ -270,45 +172,38 @@ pipeline.train(epochs=20, log_every=5)
 
 ## Datasets
 
-This project uses PyKEEN datasets rather than re-implementing dataset download and packaging.
+Datasets are resolved through PyKEEN, so any name it knows (`"nations"`, `"fb15k"`, ...) works. See the [PyKEEN dataset docs](https://pykeen.readthedocs.io/en/latest/reference/datasets.html) for the full list.
 
-If you pass a dataset name such as `"nations"` or `"fb15k"` into the pipeline, it is resolved through PyKEEN. For the full list of available datasets, see the [PyKEEN dataset documentation](https://pykeen.readthedocs.io/en/latest/reference/datasets.html).
+## Models
 
-## Supported models
+| Name | Class |
+| --- | --- |
+| `transe` | `TransE` |
+| `trans` | `TranS` |
+| `distmult` | `DistMult` |
+| `complex` | `ComplEx` |
+| `rotate` | `RotatE` |
 
-These are the models currently registered in the library:
+## Losses
 
-| Model name | Class | Status |
-| --- | --- | --- |
-| `transe` | `TransE` | Implemented |
-| `trans` | `TranS` | Implemented |
-| `distmult` | `DistMult` | Implemented |
-| `complex` | `ComplEx` | Implemented |
-| `rotate` | `RotatE` | Implemented |
-
-## Supported losses
-
-| Loss name | Meaning |
+| Name | Loss |
 | --- | --- |
 | `mrl` | Margin ranking loss |
-| `bce` | Binary cross-entropy loss |
-| `softplus` | Softplus loss |
-| `nssa` | Self-adversarial negative sampling loss |
+| `bce` | Binary cross-entropy |
+| `softplus` | Softplus |
+| `nssa` | Self-adversarial negative sampling |
 
-## Embedding initializers, constrainers, and regularizers
+## Initializers, constrainers and regularizers
 
-KGE models often need small operations around the embedding tables in addition to the interaction function itself.
+Most KGE models need a bit more than an interaction function around their embedding tables:
 
-- Initializers choose the starting embedding values before training.
-- Constrainers project embedding values after initialization and after each optimizer step. They enforce hard constraints such as unit-length entity vectors or unit-modulus complex relation values.
-- Regularizers add a soft penalty to the training loss. They encourage smaller or simpler embeddings, but they do not strictly enforce a constraint.
+- **Initializers** set the starting embedding values.
+- **Constrainers** are hard constraints, applied after initialization and after every optimizer step (for example, unit-length entity vectors).
+- **Regularizers** are soft penalties added to the training loss.
 
-These are configured separately for entity and relation embeddings through
-`model_kwargs`:
+Each is configured separately for entities and relations through `model_kwargs`:
 
 ```python
-from kge_jaxed import KGEPipeline
-
 pipeline = KGEPipeline(
     model="rotate",
     dataset="nations",
@@ -319,62 +214,54 @@ pipeline = KGEPipeline(
             "embedding_init": "normal_norm",
             "embedding_init_kwargs": {"stddev": 0.1},
         },
-        "relation_embedding_kwargs": {
-            "embedding_init": "init_phases",
-        },
-        "relation_constrainer_kwargs": {
-            "name": "unit_modulus",
-        },
-        "entity_regularizer_kwargs": {
-            "name": "lp",
-            "p": 2.0,
-            "normalize": True,
-            "weight": 0.01,
-        },
+        "relation_embedding_kwargs": {"embedding_init": "init_phases"},
+        "relation_constrainer_kwargs": {"name": "unit_modulus"},
+        "entity_regularizer_kwargs": {"name": "lp", "p": 2.0, "normalize": True, "weight": 0.01},
     },
 )
 ```
 
-The most useful built-in initializer names are:
+Each model has sensible defaults. Embedding kwargs you pass are merged over those defaults, while constrainer and regularizer kwargs replace them. An empty dict switches a default off, e.g. `entity_constrainer_kwargs={}` stops `TransE` constraining its entity embeddings (it does by default). `RotatE` constrains its relations to unit modulus by default.
+
+**Initializers**
 
 | Name | Meaning |
 | --- | --- |
-| `uniform`, `normal` | Random uniform or normal initialization |
-| `uniform_norm`, `normal_norm` | Random initialization followed by row-wise unit normalization |
-| `xavier`, `xavier_uniform`, `glorot_uniform` | Glorot uniform initialization |
-| `xavier_uniform_norm`, `glorot_uniform_norm` | Glorot uniform initialization followed by row-wise unit normalization |
-| `xavier_normal`, `glorot_normal` | Glorot normal initialization |
-| `xavier_normal_norm`, `glorot_normal_norm` | Glorot normal initialization followed by row-wise unit normalization |
-| `complex_normal`, `complex_uniform` | Complex-valued initialization with independent real and imaginary parts |
-| `init_phases`, `complex_phases` | Complex unit-modulus values, useful for RotatE relations |
+| `uniform`, `normal` | Random uniform or normal |
+| `uniform_norm`, `normal_norm` | As above, then row-wise unit normalization |
+| `xavier`, `xavier_uniform`, `glorot_uniform` | Glorot uniform |
+| `xavier_uniform_norm`, `glorot_uniform_norm` | Glorot uniform, then row-wise unit normalization |
+| `xavier_normal`, `glorot_normal` | Glorot normal |
+| `xavier_normal_norm`, `glorot_normal_norm` | Glorot normal, then row-wise unit normalization |
+| `complex_normal`, `complex_uniform` | Complex values with independent real and imaginary parts |
+| `init_phases`, `complex_phases` | Complex values of unit modulus, useful for RotatE relations |
 
-The built-in constrainers are:
+**Constrainers**
 
 | Name | Meaning |
 | --- | --- |
-| `unit_norm` or `normalize` | Normalize each embedding row to unit L2 norm |
-| `max_norm` or `clamp_norm` | Project rows with norm above `max_value` back to that norm |
-| `clip` or `clamp` | Clip individual values into `[min_value, max_value]` |
+| `unit_norm`, `normalize` | Normalize each row to unit L2 norm |
+| `max_norm`, `clamp_norm` | Project rows with norm above `max_value` back to that norm |
+| `clip`, `clamp` | Clip values into `[min_value, max_value]` |
 | `non_negative` | Replace negative values with zero |
-| `unit_modulus` or `complex_normalize` | Project each complex value to magnitude one |
+| `unit_modulus`, `complex_normalize` | Project each complex value to magnitude one |
 
-The built-in regularizers are:
+**Regularizers**
 
 | Name | Meaning |
 | --- | --- |
 | `lp` | Mean or sum of row-wise Lp norms |
 | `np`, `powersum`, `power_sum`, `n3` | Mean or sum of `sum(abs(x) ** p)` per row; `p=3` gives an N3-style penalty |
 
-Passing `None` for a model config uses that model's default. Passing an empty
-dict such as `entity_constrainer_kwargs={}` disables that default. This matters
-for models such as `TransE`, which constrains entity embeddings by default, and
-`RotatE`, which constrains relation embeddings to unit modulus by default.
-
 ## Development
 
-Linting and unit tests are configured through `tox`.
+Tests and linting run through `tox`:
 
 ```bash
-tox -e lint
 tox -e test
+tox -e lint
 ```
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
