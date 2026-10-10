@@ -23,11 +23,21 @@ Everything goes through `KGEPipeline`, which handles the dataset, model, trainin
 
 ## Installation
 
-The project uses [uv](https://github.com/astral-sh/uv):
+KGE-JAXed needs Python 3.12 or newer and uses [uv](https://docs.astral.sh/uv/) to manage the environment. If you don't have uv yet, follow its [install guide](https://docs.astral.sh/uv/getting-started/installation/), then from the repository root run:
 
 ```bash
 uv sync
 ```
+
+This creates a `.venv` in the project and installs the locked dependencies from `uv.lock`. The repo's `.python-version` pins Python 3.12, so uv will download that interpreter if you don't already have one.
+
+You don't need to activate the environment. Prefix commands with `uv run` and uv uses the project's `.venv`:
+
+```bash
+uv run python my_script.py
+```
+
+If you prefer an activated shell, run `source .venv/bin/activate` instead. `ipykernel` is installed too, so you can pick the `.venv` as a kernel in Jupyter or VS Code notebooks.
 
 ### Hardware support
 
@@ -123,6 +133,33 @@ relation_summary = (
 
 print(relation_summary.head(10))
 ```
+
+## Making predictions
+
+Once you have a checkpoint, `KGEPredict` scores every entity for a query such as `(usa, treaties, ?)`:
+
+```python
+from kge_jaxed import KGEPredict
+
+predictor = KGEPredict("checkpoints/transe-nations")
+
+tail_scores = predictor.predict("usa", "treaties", predict_side="tail")
+print(tail_scores.head(10))
+```
+
+You pass entity and relation labels, not ids. `predict_side` is `"tail"` to complete `(head, relation, ?)` or `"head"` to complete `(?, relation, tail)`. In the head case, the entity you pass is the tail.
+
+The result is a dataframe sorted by score, highest first (higher means more plausible), with one row per entity:
+
+```text
+    entity  score  in_train  in_test  in_val
+0   ...     ...    True      False    False
+1   ...     ...    False     True     False
+```
+
+The `in_train`, `in_test` and `in_val` columns tell you whether the completed triple is already in that split. This helps you separate facts the model has seen from genuinely new predictions. Filtering to `~in_train` is a good way to find candidates for missing links.
+
+`KGEPredict` rebuilds the dataset from the name stored in the checkpoint metadata. It loads the dataset with default settings and ignores any `dataset_kwargs` you trained with. The entity and relation labels come from that dataset (see `pipeline.dataset.entity_to_id` and `relation_to_id`).
 
 ## Using a different model
 
@@ -252,6 +289,28 @@ Each model has sensible defaults. Embedding kwargs you pass are merged over thos
 | --- | --- |
 | `lp` | Mean or sum of row-wise Lp norms |
 | `np`, `powersum`, `power_sum`, `n3` | Mean or sum of `sum(abs(x) ** p)` per row; `p=3` gives an N3-style penalty |
+
+## Project layout
+
+The code is meant to be read top to bottom, starting at `KGEPipeline` in `src/kge_jaxed/pipeline.py`. It owns the dataset, model, optimizer and the training loop, and it calls into everything else:
+
+```text
+src/kge_jaxed/
+├── pipeline.py          # KGEPipeline: train, evaluate, checkpoint (start here)
+├── predict.py           # KGEPredict: score queries from a saved checkpoint
+├── rngs.py              # Explicit RNG handling, derived from a single seed
+├── models/              # TransE, DistMult, ComplEx, RotatE, TranS, plus embeddings and initializers
+├── loss_functions/      # mrl, bce, softplus, nssa
+├── negative_sampling/   # Negative samplers
+├── constraints/         # Constrainers
+├── regularization/      # Regularizers
+├── training/            # JIT-compiled train step, setup and checkpointing
+├── evaluation/          # Ranking and metrics
+├── datasets/            # Dataset wrappers, including PyKEEN
+└── registry/            # Maps string names ("transe", "mrl", ...) to classes
+```
+
+A model only has to implement `interaction_function(h, r, t)`. Scores follow the convention that higher means more plausible, and every built-in loss is written against that.
 
 ## Development
 
